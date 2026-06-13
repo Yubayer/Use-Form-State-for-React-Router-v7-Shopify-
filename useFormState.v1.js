@@ -4,7 +4,7 @@
  * ─── এই hook যা যা handle করে ───────────────────────────────────────────────
  *  • যেকোনো shape-এর form values (scalar, object, array, deeply nested)
  *  • Dirty tracking — global (isDirty) এবং per-field (fs.field.isDirty)
- *  • File upload ও existing media manage (slot-based এবং path-based)
+ *  • File upload (slot-based staging) এবং single URL field null করা (avatar, cover ইত্যাদি)
  *  • Validation — manual function এবং/অথবা Zod schema
  *  • Touched / blur / error state management
  *  • Async submit flow (isSubmitting auto-manage)
@@ -21,7 +21,7 @@
  *  fs.field.*         → per-field operations (bind, error, dirty, touch, toggle…)
  *  fs.list.*          → array operations (append, remove, move, sort, bind…)
  *  fs.object.*        → dynamic object key management
- *  fs.media.*         → file upload + existing media management
+ *  fs.media.*         → নতুন file upload staging এবং single URL field null করা
  *  fs.snapshot.*      → saved baseline read
  *  fs.history.*       → undo/redo (historyLimit > 0 হলে active)
  *  fs.validate.*      → manual validation trigger
@@ -1497,7 +1497,20 @@ export function useFormState(serverData, buildFormShape, options = {}) {
     }), [applyUpdate]);
 
     /* ──────────────────────────────────────────────────────────────────────────
-     * ███ fs.media — file upload + existing media management
+     * ███ fs.media — নতুন file upload staging + single URL field null করা
+     *
+     * দুটো কাজ করে:
+     *  1. নতুন file (File object) form values-এর বাইরে আলাদা pendingFiles-এ রাখে।
+     *     File object serialize হয় না, তাই values-এ রাখা যায় না।
+     *
+     *  2. Form-এ যদি একটা single URL field থাকে (যেমন avatarUrl, coverUrl),
+     *     সেটা user remove করলে শুধু "" করলেই server বুঝবে না DB-তে null করতে হবে।
+     *     removeExisting() সেই URL clear করে এবং removedKeys-এ flag রাখে।
+     *     Server সেই flag দেখে DB-তে null করে।
+     *
+     * ⚠️  Image array manage করতে fs.media ব্যবহার করো না।
+     *     Array থেকে image remove করতে → fs.list.remove()
+     *     Array-তে image reorder করতে → fs.list.move() / fs.list.reorder()
      * ────────────────────────────────────────────────────────────────────────── */
 
     const media = useMemo(() => ({
@@ -1509,8 +1522,12 @@ export function useFormState(serverData, buildFormShape, options = {}) {
         pendingFiles,
 
         /**
-         * Remove করা existing media keys।
-         * onSubmit-এ removedKeys হিসেবে পাবে — DB-তে null করতে ব্যবহার করো।
+         * removeExisting() দিয়ে clear করা URL field-এর map।
+         * onSubmit-এ server এই flag দেখে DB-তে সেই field null করে।
+         *
+         * ⚠️  শুধু single URL field-এর জন্য (avatarUrl, coverUrl ইত্যাদি)।
+         *     Image array থেকে item remove করতে এটা ব্যবহার হয় না —
+         *     সেক্ষেত্রে fs.list.remove() use করো।
          * @type {{ [urlFieldPath: string]: true }}
          */
         removedKeys,
@@ -1533,11 +1550,11 @@ export function useFormState(serverData, buildFormShape, options = {}) {
 
         /**
          * Directly file set করো (programmatic use)।
-         * @param {string} slotName
+         * @param {string} slotName - যেকোনো unique string নাম দাও
          * @param {File[]} fileList
          * @example
          * fs.media.setFile("avatar", [selectedFile])
-         * fs.media.setFile("sections.0.image", [file])  // path-based
+         * fs.media.setFile("coverPhoto", [file])
          */
         setFile: (slotName, fileList) => {
             log(`media.setFile("${slotName}")`, fileList);
@@ -1575,18 +1592,25 @@ export function useFormState(serverData, buildFormShape, options = {}) {
         },
 
         /**
-         * Existing media remove করো।
-         * Form-এ URL field clear হয়, removedKeys-এ flag set হয়।
-         * onSubmit-এ removedKeys দেখে DB-তে null করো।
-         * @param {Path} urlFieldPath - form-এ URL store হওয়া field-এর path
+         * Form-এ একটা single URL field (যেমন avatarUrl, coverUrl) clear করো
+         * এবং removedKeys-এ flag set করো যাতে server DB-তে null করতে পারে।
+         *
+         * ⚠️  এটা শুধু single URL string field-এর জন্য।
+         *     Image array থেকে item বাদ দিতে → fs.list.remove() use করো।
+         *
+         * @param {Path} urlFieldPath - form-এ যে field-এ URL string আছে
          * @example
+         * // avatarUrl একটা string field — user remove করলে DB-তে null হবে
          * <ImagePickerField
          *   previewUrl={fs.values.avatarUrl}
          *   onRemove={() => fs.media.removeExisting("avatarUrl")}
          * />
          *
-         * // Nested:
-         * fs.media.removeExisting("sections.0.imageUrl")
+         * // onSubmit-এ server জানবে কোন URL field null করতে হবে
+         * onSubmit: async (values, { removedKeys }) => {
+         *   // removedKeys: { "avatarUrl": true }
+         *   if (removedKeys["avatarUrl"]) { // DB-তে avatarUrl = null }
+         * }
          */
         removeExisting: (urlFieldPath) => {
             const key = toPathKey(urlFieldPath);
@@ -2123,46 +2147,55 @@ export function useFormState(serverData, buildFormShape, options = {}) {
         object,
 
         /**
-         * File upload এবং existing media management।
+         * নতুন file upload staging এবং single URL field null করা।
          *
-         * fs.media.pendingFiles              → { slotName: File[] } staged files
-         * fs.media.removedKeys               → { urlFieldPath: true } removed flags
-         * fs.media.setterFor(slot)           → ImagePicker setter factory
-         * fs.media.setFile(slot, files)      → programmatically file set
-         * fs.media.getFiles(slot)            → File[] পাও
-         * fs.media.hasFile(slot)             → file আছে কিনা
-         * fs.media.clearFiles(slot)          → staged files discard
-         * fs.media.removeExisting(urlPath)   → preview clear + DB null flag
-         * fs.media.undoRemove(urlPath)       → snapshot থেকে restore
-         * fs.media.hasRemoved(urlPath)       → remove করা হয়েছে কিনা
+         * ─── কখন fs.media ব্যবহার করবে ────────────────────────────────────
+         *  • নতুন file upload করতে হলে (File object values-এ রাখা যায় না)
+         *  • Form-এ একটা single URL string field আছে (avatarUrl, coverUrl)
+         *    এবং user সেটা remove করলে DB-তে null করতে হবে
+         *
+         * ─── কখন fs.media ব্যবহার করবে না ─────────────────────────────────
+         *  • Image array থেকে item remove → fs.list.remove() use করো
+         *  • Image array reorder → fs.list.move() / fs.list.reorder()
+         *
+         * fs.media.pendingFiles            → { slotName: File[] } staged files
+         * fs.media.removedKeys             → { urlFieldPath: true } null করার flags
+         * fs.media.setterFor(slot)         → ImagePicker-এর setValue prop-এ দাও
+         * fs.media.setFile(slot, files)    → programmatically file set করো
+         * fs.media.getFiles(slot)          → File[] পাও
+         * fs.media.hasFile(slot)           → file আছে কিনা
+         * fs.media.clearFiles(slot)        → staged files discard করো
+         * fs.media.removeExisting(urlPath) → single URL field clear + null flag
+         * fs.media.undoRemove(urlPath)     → removeExisting undo করো
+         * fs.media.hasRemoved(urlPath)     → remove করা হয়েছে কিনা
          *
          * @example
-         * // Simple image upload
+         * // ── নতুন file upload ──────────────────────────────────────────
          * <ImagePickerField
          *   value={fs.media.pendingFiles["avatar"] ?? []}
          *   setValue={fs.media.setterFor("avatar")}
+         * />
+         * {fs.media.hasFile("avatar") && (
+         *   <Button onClick={() => fs.media.clearFiles("avatar")}>Clear</Button>
+         * )}
+         *
+         * // ── Single URL field null করা ─────────────────────────────────
+         * // avatarUrl = "https://..." একটা string field
+         * <ImagePickerField
          *   previewUrl={fs.values.avatarUrl}
          *   onRemove={() => fs.media.removeExisting("avatarUrl")}
          * />
-         *
-         * // Undo remove button
          * {fs.media.hasRemoved("avatarUrl") && (
          *   <Button onClick={() => fs.media.undoRemove("avatarUrl")}>Undo</Button>
          * )}
          *
-         * // List item-এর ভেতরে image (path-based)
-         * <ImagePickerField
-         *   value={fs.media.pendingFiles["sections.0.image"] ?? []}
-         *   setValue={fs.media.setterFor("sections.0.image")}
-         *   previewUrl={fs.values.sections[0].imageUrl}
-         *   onRemove={() => fs.media.removeExisting("sections.0.imageUrl")}
-         * />
-         *
-         * // onSubmit-এ files handle করো
+         * // ── onSubmit-এ handle করো ────────────────────────────────────
          * onSubmit: async (values, { pendingFiles, removedKeys }) => {
          *   const fd = new FormData()
          *   fd.append("data", JSON.stringify(values))
+         *   // null করার flags
          *   fd.append("removedMedia", JSON.stringify(removedKeys))
+         *   // নতুন file
          *   if (pendingFiles["avatar"]?.[0]) fd.append("avatar", pendingFiles["avatar"][0])
          *   fetcher.submit(fd, { method: "POST", encType: "multipart/form-data" })
          * }
