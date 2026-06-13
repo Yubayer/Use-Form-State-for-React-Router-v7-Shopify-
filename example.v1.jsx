@@ -128,6 +128,25 @@ const loaderData = {
         { id: "f1", question: "Is it waterproof?", answer: "Yes!",             sortOrder: 0 },
         { id: "f2", question: "What colors?",       answer: "Brown and Black.", sortOrder: 1 },
     ],
+
+    // ── Images array ───────────────────────────────────────────────────────
+    // Product-এর existing images — server-এ already আছে।
+    // প্রতিটা item: { id, url, altText, sortOrder }
+    //
+    // কীভাবে manage করা হবে:
+    //   existing image remove → fs.list.remove() — array থেকে বাদ যায়
+    //   existing image reorder → fs.list.bindItem().moveUp/moveDown
+    //   existing image altText update → fs.list.bindItem().setField("altText", v)
+    //   নতুন image upload → fs.media (pendingFiles["newImages"])
+    //
+    // ⚠️  fs.media.removeExisting() এখানে use হয় না।
+    //     সেটা single URL string field-এর জন্য (avatarUrl, coverUrl)।
+    //     Image array manage করতে সবসময় fs.list use করো।
+    images: [
+        { id: "img1", url: "https://cdn.example.com/product-1.jpg", altText: "Front view",  sortOrder: 0 },
+        { id: "img2", url: "https://cdn.example.com/product-2.jpg", altText: "Side view",   sortOrder: 1 },
+        { id: "img3", url: "https://cdn.example.com/product-3.jpg", altText: "Detail view", sortOrder: 2 },
+    ],
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -183,6 +202,11 @@ function buildShape(data) {
         sections: arr(data?.sections),
         variants: arr(data?.variants),
         faqItems: arr(data?.faqItems),
+
+        // images — existing product images array।
+        // প্রতিটা item: { id, url, altText, sortOrder }
+        // Server-এ null বা missing হলে [] হবে।
+        images: arr(data?.images),
     };
 }
 
@@ -296,6 +320,15 @@ export function ProductForm() {
             // Server-এ `gallery_0`, `gallery_1` key দিয়ে parse করো
             (pendingFiles["gallery"] ?? []).forEach((file, i) => {
                 fd.append(`gallery_${i}`, file);
+            });
+
+            // New product images — pendingFiles["newImages"]
+            // values.images — remaining existing images (server এটা দেখে কোনগুলো রাখবে)
+            // Server flow:
+            //   1. values.images-এ যেগুলো নেই সেগুলো delete করো
+            //   2. pendingFiles["newImages"] গুলো upload করে DB-তে save করো
+            (pendingFiles["newImages"] ?? []).forEach((file, i) => {
+                fd.append(`newImages_${i}`, file);
             });
 
             fetcher.submit(fd, { method: "POST", encType: "multipart/form-data" });
@@ -1573,6 +1606,240 @@ export function ProductForm() {
                             // pendingFiles["gallery"] = []
                         >
                             Clear all selected images
+                        </s-button>
+                    </div>
+                )}
+
+
+                {/* ══════════════════════════════════════════════════════════
+                  * Product Images — existing images array manage
+                  *
+                  * এটা fs.media ব্যবহার করে না।
+                  * Existing images একটা array — { id, url, altText, sortOrder }
+                  * fs.list দিয়ে manage করা হয়:
+                  *   remove  → fs.list.remove() বা item.remove()
+                  *   reorder → item.moveUp() / item.moveDown()
+                  *   update  → item.setField("altText", value)
+                  *
+                  * নতুন image upload → আলাদা s-drop-zone, pendingFiles["newImages"]
+                  *
+                  * onSubmit-এ:
+                  *   values.images — remaining existing images (server update করবে)
+                  *   pendingFiles["newImages"] — নতুন files upload করতে হবে
+                  * ════════════════════════════════════════════════════════ */}
+
+                {/* ── Existing images list ─────────────────────────────────── */}
+                {fs.values.images.length > 0 && (
+                    <div style={{ marginTop: "16px" }}>
+                        <p style={{ fontWeight: "bold", marginBottom: "8px" }}>
+                            Product Images ({fs.values.images.length})
+                            {/* images array dirty হলে indicator */}
+                            {fs.field.isDirty("images") && (
+                                <s-badge tone="warning" style={{ marginLeft: "8px" }}>Changed</s-badge>
+                            )}
+                        </p>
+
+                        {fs.values.images.map((image, i) => {
+                            // bindItem — এই image row-এর সব helper
+                            const item = fs.list.bindItem("images", i);
+                            return (
+                                <div
+                                    key={image.id}
+                                    style={{
+                                        display: "flex",
+                                        gap: "12px",
+                                        alignItems: "center",
+                                        padding: "8px",
+                                        border: "1px solid #e0e0e0",
+                                        borderRadius: "4px",
+                                        marginBottom: "8px",
+                                        // dirty row — light highlight
+                                        background: item.isDirty ? "#fffbeb" : "transparent",
+                                    }}
+                                >
+                                    {/* Existing image preview — server URL */}
+                                    <img
+                                        src={item.value.url}
+                                        alt={item.value.altText || "Product image"}
+                                        width={64}
+                                        height={64}
+                                        style={{ objectFit: "cover", borderRadius: "4px", flexShrink: 0 }}
+                                    />
+
+                                    {/* ── altText update — item.setField ────────────
+                                      * fs.list.setField("images", i, "altText", v) shortcut।
+                                      * SEO ও accessibility-র জন্য important।
+                                      * ──────────────────────────────────────────── */}
+                                    <s-text-field
+                                        label="Alt text"
+                                        value={item.value.altText}
+                                        onChange={(e) => item.setField("altText", e.currentTarget.value)}
+                                        // SEO ও accessibility-র জন্য descriptive text দাও
+                                    />
+
+                                    {/* Dirty indicator — এই row change হয়েছে */}
+                                    {item.isDirty && (
+                                        <s-badge tone="warning">Modified</s-badge>
+                                    )}
+
+                                    {/* Position info */}
+                                    <span style={{ color: "#666", fontSize: "12px", whiteSpace: "nowrap" }}>
+                                        {item.index + 1} / {fs.values.images.length}
+                                    </span>
+
+                                    {/* ── Reorder buttons ────────────────────────────
+                                      * moveUp / moveDown — item.isFirst/isLast দিয়ে disable।
+                                      * Reorder-এর পর normalizeOrder call করো sortOrder fix করতে।
+                                      * ──────────────────────────────────────────── */}
+                                    <s-button-group>
+                                        <s-button
+                                            variant="tertiary"
+                                            onClick={() => {
+                                                item.moveUp();
+                                                fs.list.normalizeOrder("images", "sortOrder");
+                                                // images[i] ↑ + sortOrder: 0,1,2... re-stamp
+                                            }}
+                                            disabled={item.isFirst}
+                                            icon="arrow-up"
+                                        />
+                                        <s-button
+                                            variant="tertiary"
+                                            onClick={() => {
+                                                item.moveDown();
+                                                fs.list.normalizeOrder("images", "sortOrder");
+                                            }}
+                                            disabled={item.isLast}
+                                            icon="arrow-down"
+                                        />
+
+                                        {/* ── item.remove — array থেকে বাদ দাও ────────
+                                          * Submit-এ values.images-এ এটা থাকবে না।
+                                          * Server বুঝবে এই image delete করতে হবে।
+                                          * ──────────────────────────────────────────── */}
+                                        <s-button
+                                            variant="tertiary"
+                                            tone="critical"
+                                            onClick={item.remove}
+                                            icon="delete"
+                                            // ⚠️  fs.media.removeExisting() না —
+                                            //     সেটা single URL field-এর জন্য।
+                                            //     Array item remove করতে সবসময় item.remove()।
+                                        />
+                                    </s-button-group>
+                                </div>
+                            );
+                        })}
+
+                        {/* ── Bulk actions ──────────────────────────────────────
+                          * sort — sortOrder field দিয়ে ascending sort
+                          * clear — সব existing images বাদ দাও (submit-এ server delete করবে)
+                          * ──────────────────────────────────────────────────── */}
+                        <s-button-group>
+                            <s-button
+                                variant="secondary"
+                                onClick={() => {
+                                    fs.list.sort("images", "sortOrder", "asc");
+                                    // sortOrder ascending sort — original order
+                                }}
+                            >
+                                Reset order
+                            </s-button>
+                            <s-button
+                                variant="tertiary"
+                                tone="critical"
+                                onClick={() => fs.list.clear("images")}
+                                // images = [] — submit-এ server সব delete করবে
+                            >
+                                Remove all images
+                            </s-button>
+                        </s-button-group>
+                    </div>
+                )}
+
+                {/* ── New images upload — pendingFiles["newImages"] ───────────
+                  *
+                  * Existing images manage করা হয় fs.list দিয়ে (উপরে)।
+                  * নতুন images upload করতে s-drop-zone use করো।
+                  *
+                  * onSubmit-এ:
+                  *   values.images    — remaining existing images (server DB update)
+                  *   pendingFiles["newImages"] — নতুন File[] (S3/Cloudflare-এ upload)
+                  *
+                  * Server flow:
+                  *   1. values.images দেখে কোন existing images রাখতে হবে
+                  *   2. removedImages = originalImages - values.images (delete করো)
+                  *   3. pendingFiles["newImages"] upload করো, URL পাও, DB-তে save করো
+                  * ──────────────────────────────────────────────────────── */}
+                <s-drop-zone
+                    label="Add New Images"
+                    accept="image/jpeg,image/png,image/webp"
+                    multiple={true}
+                    // multiple={true} — একাধিক new image একসাথে select করা যাবে
+                    accessibilityLabel="Upload new product images — drag and drop or click to browse"
+                    onChange={(e) => {
+                        const newFiles = Array.from(e.currentTarget.files ?? []);
+                        if (newFiles.length > 0) {
+                            // আগের new images staged files রাখো, নতুন গুলো merge করো
+                            const existing = fs.media.getFiles("newImages");
+                            fs.media.setterFor("newImages")([...existing, ...newFiles]);
+                            // pendingFiles["newImages"] = [...existing, ...newFiles]
+                        }
+                    }}
+                    onDropRejected={() => {
+                        fs.field.setError("newImages", "Only JPG, PNG, WebP allowed");
+                    }}
+                    error={fs.field.error("newImages") ?? undefined}
+                />
+
+                {/* Staged new images preview */}
+                {fs.media.hasFile("newImages") && (
+                    <div style={{ marginTop: "8px" }}>
+                        <p style={{ fontWeight: "bold" }}>
+                            New images to upload ({fs.media.getFiles("newImages").length})
+                        </p>
+
+                        {fs.media.getFiles("newImages").map((file, i) => (
+                            <div
+                                key={`${file.name}-${i}`}
+                                style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "4px" }}
+                            >
+                                {/* Local preview — URL.createObjectURL দিয়ে */}
+                                <img
+                                    src={URL.createObjectURL(file)}
+                                    alt={file.name}
+                                    width={48}
+                                    height={48}
+                                    style={{ objectFit: "cover", borderRadius: "4px", flexShrink: 0 }}
+                                />
+                                <div style={{ flex: 1 }}>
+                                    <p style={{ margin: 0 }}>{file.name}</p>
+                                    <p style={{ margin: 0, color: "#666", fontSize: "12px" }}>
+                                        {(file.size / 1024).toFixed(1)} KB
+                                    </p>
+                                </div>
+                                {/* এই specific staged file বাদ দাও */}
+                                <s-button
+                                    variant="tertiary"
+                                    tone="critical"
+                                    onClick={() => {
+                                        const currentFiles = fs.media.getFiles("newImages");
+                                        fs.media.setterFor("newImages")(
+                                            currentFiles.filter((_, idx) => idx !== i)
+                                        );
+                                    }}
+                                >
+                                    ✕
+                                </s-button>
+                            </div>
+                        ))}
+
+                        {/* সব new staged images clear */}
+                        <s-button
+                            variant="tertiary"
+                            tone="critical"
+                            onClick={() => fs.media.clearFiles("newImages")}
+                        >
+                            Clear all new images
                         </s-button>
                     </div>
                 )}
