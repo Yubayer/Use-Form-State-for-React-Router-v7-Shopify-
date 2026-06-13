@@ -1,32 +1,45 @@
 /**
- * @fileoverview useFormState — সব feature-এর complete example with dummy data।
+ * @fileoverview useFormState — Polaris Web Components দিয়ে complete example।
  *
- * এই file পড়লেই বোঝা যাবে:
- *  — hook কীভাবে setup করতে হয়
- *  — কোন option কী কাজ করে
- *  — প্রতিটা method কীভাবে use করতে হয়
+ * ─── Important: Polaris Web Components vs Polaris React ──────────────────────
+ *  এটা Shopify-এর নতুন Web Components API (2025-10+)।
+ *  Component names `s-` prefix দিয়ে শুরু হয়: s-text-field, s-button ইত্যাদি।
+ *  Import করতে হয় না — polaris.js script tag থেকে auto-load হয়।
+ *
+ *  root.tsx-এ এই script tag add করতে হবে:
+ *  <script src="https://cdn.shopify.com/shopifycloud/polaris.js" />
+ *
+ *  TypeScript types:
+ *  npm install @shopify/polaris-types
+ *
+ * ─── Web Component event handling (JSX-এ) ───────────────────────────────────
+ *  Polaris Web Components-এ events camelCase JSX prop হিসেবে আসে:
+ *    onChange  → s-text-field, s-checkbox, s-drop-zone
+ *    onClick   → s-button
+ *    onBlur    → s-text-field
+ *
+ *  event.currentTarget দিয়ে element access করো:
+ *    onChange={(e) => fs.set("title", e.currentTarget.value)}
+ *
+ * ─── fs.field.bind() Web Components-এ কাজ করে না ───────────────────────────
+ *  Polaris React-এ bind() spread করা যেত।
+ *  Web Components-এ prop names আলাদা — manually লিখতে হবে।
  *
  * ─── এই file-এ যা যা আছে ────────────────────────────────────────────────────
- *  1.  loaderData      — server থেকে আসা dummy data
- *  2.  buildShape      — server data → clean form shape
- *  3.  schema          — Zod validation schema
- *  4.  useFormState    — hook setup with all options
- *  5.  fs.values       — live form values read
- *  6.  fs.set          — যেকোনো depth-এ value set
- *  7.  fs.get          — যেকোনো depth থেকে value read
- *  8.  fs.setMany      — batch update একটা render-এ
- *  9.  fs.merge        — partial object merge
- *  10. fs.field.*      — per-field bind, error, dirty, touch, toggle, compute, watch
- *  11. fs.list.*       — array append, remove, move, sort, bindItem (nested সহ)
- *  12. fs.object.*     — dynamic key add, update, delete
- *  13. fs.media.*      — নতুন file upload + single URL field null করা
- *  14. fs.snapshot.*   — saved baseline read, per-field revert
- *  15. fs.history.*    — undo/redo
- *  16. fs.validate.*   — manual validation trigger
- *  17. fs.dirtyFields  — সব changed field-এর map
- *  18. fs.fieldErrors  — সব error-এর raw map
- *  19. fs.touchedFields— সব touched field-এর raw map
- *  20. fs.submit / fs.reset / fs.syncAfterSave — lifecycle
+ *  1.  loaderData       — server থেকে আসা dummy data
+ *  2.  buildShape       — server data → clean form shape
+ *  3.  schema           — Zod validation schema
+ *  4.  useFormState     — hook setup with all options
+ *  5.  fs.values        — live form values read
+ *  6.  fs.set/get/setMany/merge — general value ops
+ *  7.  fs.field.*       — per-field error, dirty, touch, toggle, compute, watch
+ *  8.  fs.list.*        — array operations with bindItem
+ *  9.  fs.object.*      — dynamic key management
+ *  10. fs.media.*       — file upload (s-drop-zone) + single URL null করা
+ *  11. fs.snapshot.*    — saved baseline
+ *  12. fs.history.*     — undo/redo
+ *  13. fs.validate.*    — manual validation
+ *  14. Lifecycle        — submit, reset, syncAfterSave
  */
 
 import { useFormState, str, bool, num, arr, obj } from "./useFormState";
@@ -36,75 +49,81 @@ import { useFetcher } from "react-router";
 /* ════════════════════════════════════════════════════════════════════════════
  * ███ 1. DUMMY SERVER DATA
  *
- * Real app-এ এটা loader() থেকে আসে।
- * null, undefined, missing field সব থাকতে পারে — buildShape সেগুলো normalize করে।
+ * Real app-এ loader() থেকে আসে।
+ * null, undefined, missing field সব থাকতে পারে।
  * ════════════════════════════════════════════════════════════════════════════ */
 
 const loaderData = {
-    id:          "prod_123",
-    title:       "Handmade Leather Bag",
-    description: "A beautiful handmade bag.",
-    email:       "contact@store.com",
-    phone:       "+8801712345678",
-    price:       1200,
-    stock:       50,
-    isActive:    true,
-    isFeatured:  false,
+    // ── Scalar fields ─────────────────────────────────────────────────────
+    id:          "prod_123",            // DB primary key — form-এ show করা হয় না, submit-এ পাঠানো হয়
+    title:       "Handmade Leather Bag",// string — buildShape-এ str() দিয়ে normalize হবে
+    description: "A beautiful handmade bag crafted with care.", // string
+    email:       "contact@store.com",   // string — Zod schema-তে email format validate হবে
+    phone:       "+8801712345678",      // string — regex দিয়ে validate হবে
+    price:       1200,                  // number — buildShape-এ num() দিয়ে "1200" string হবে
+    stock:       50,                    // number — num() দিয়ে "50" string হবে
+    isActive:    true,                  // boolean — buildShape-এ bool() দিয়ে normalize হবে
+    isFeatured:  false,                 // boolean
 
-    // Single URL string field — null হতে পারে
-    avatarUrl: "https://cdn.example.com/avatar.jpg",
-    coverUrl:  null,  // ← null হলে str() দিয়ে "" হবে
+    // ── Single URL string fields ───────────────────────────────────────────
+    // এগুলো form-এ preview দেখাতে use হয়।
+    // User remove করলে fs.media.removeExisting() call করতে হয়।
+    // null আসতে পারে — str() দিয়ে "" হবে।
+    avatarUrl: "https://cdn.example.com/avatar.jpg", // server-এ already আছে
+    coverUrl:  null,                                  // এখনো upload হয়নি
 
-    // Nested object
-    address: {
-        city:    "Dhaka",
-        zip:     "1000",
-        country: "BD",
-    },
-    seo: {
-        title:       "Handmade Leather Bag — My Store",
-        description: "Buy the best handmade leather bag.",
-    },
+    // ── Nested objects ─────────────────────────────────────────────────────
+    // buildShape-এ obj() দিয়ে normalize করা হবে।
+    // server-এ null আসলে fallback object use হবে।
+    address: { city: "Dhaka", zip: "1000", country: "BD" },
+    seo:     { title: "Handmade Leather Bag — My Store", description: "Buy the best." },
 
-    // Dynamic keys — কতটা key থাকবে আগে জানা নেই
+    // ── Dynamic key object ─────────────────────────────────────────────────
+    // কতটা key থাকবে আগে জানা নেই — runtime-এ add/delete হয়।
+    // fs.object.setKey() / fs.object.deleteKey() দিয়ে manage করা হবে।
     socialLinks: {
         facebook:  "https://facebook.com/mystore",
         instagram: "https://instagram.com/mystore",
     },
 
-    // Arrays
+    // ── Simple array ───────────────────────────────────────────────────────
+    // buildShape-এ arr() দিয়ে normalize হবে।
+    // fs.list.* দিয়ে manage করা হবে।
     tags: [
         { id: "t1", name: "leather",  color: "brown" },
         { id: "t2", name: "handmade", color: "green" },
     ],
 
-    // Nested array — section-এর ভেতরে blocks
+    // ── Nested array — section → blocks ────────────────────────────────────
+    // দুই level deep: sections array, প্রতিটা section-এর ভেতরে blocks array।
+    // sortOrder — drag-drop reorder-এর পর DB-তে এই field save হয়।
+    // fs.list.bindItem("sections", si) + fs.list.bindItem(`sections.${si}.blocks`, bi)
     sections: [
         {
-            id:        "s1",
-            heading:   "Features",
-            sortOrder: 0,
+            id: "s1", heading: "Features", sortOrder: 0,
             blocks: [
                 { id: "b1", type: "text",  content:  "Durable and stylish." },
                 { id: "b2", type: "image", imageUrl: "https://cdn.example.com/img1.jpg" },
             ],
         },
         {
-            id:        "s2",
-            heading:   "Specifications",
-            sortOrder: 1,
+            id: "s2", heading: "Specifications", sortOrder: 1,
             blocks: [
                 { id: "b3", type: "text", content: "Weight: 500g" },
             ],
         },
     ],
 
+    // ── Variants array ─────────────────────────────────────────────────────
+    // sort, filter, updateWhere, findIndex সব এই array-তে দেখানো হবে।
     variants: [
         { id: "v1", name: "Small",  price: 1000, stock: 20, sortOrder: 0 },
         { id: "v2", name: "Medium", price: 1200, stock: 50, sortOrder: 1 },
         { id: "v3", name: "Large",  price: 1500, stock: 10, sortOrder: 2 },
     ],
 
+    // ── FAQ array ──────────────────────────────────────────────────────────
+    // reorder + normalizeOrder pattern দেখানো হবে।
     faqItems: [
         { id: "f1", question: "Is it waterproof?", answer: "Yes!",             sortOrder: 0 },
         { id: "f2", question: "What colors?",       answer: "Brown and Black.", sortOrder: 1 },
@@ -114,46 +133,52 @@ const loaderData = {
 /* ════════════════════════════════════════════════════════════════════════════
  * ███ 2. buildShape — server data → clean form shape
  *
- * এটা pure function — server data নিয়ে form-এর expected shape return করে।
- * Normalize helper গুলো (str, bool, num, arr, obj) এখানে use করো।
+ * Normalize helper গুলো use করো:
+ *   str()  — null/undefined → ""
+ *   num()  — null/undefined → "", number → string
+ *   bool() — null/undefined → false
+ *   obj()  — null/undefined → fallback object
+ *   arr()  — null/undefined → fallback array (default [])
  *
- * কেন দরকার?
- *   Server থেকে null আসলে আর form-এ "" থাকলে deepEqual মিলবে না।
- *   তখন কোনো change না করলেও isDirty = true হয়ে যাবে।
- *   এই function সেটা prevent করে — সব value-কে stable shape দেয়।
+ * এটা না করলে null vs "" dirty check false positive দেবে।
  * ════════════════════════════════════════════════════════════════════════════ */
 
 function buildShape(data) {
     return {
         // str(v) — null/undefined → ""
-        // Text input এবং URL field-এর জন্য
+        // Server-এ null আসলে form-এ "" হবে — dirty check সঠিক থাকবে।
+        // "" vs null হলে deepEqual fail করে isDirty = true হয়ে যেত।
         title:       str(data?.title),
         description: str(data?.description),
         email:       str(data?.email),
         phone:       str(data?.phone),
-        avatarUrl:   str(data?.avatarUrl),  // null → ""
-        coverUrl:    str(data?.coverUrl),   // null → ""
+        avatarUrl:   str(data?.avatarUrl),  // null → "" — preview conditionally দেখানো হবে
+        coverUrl:    str(data?.coverUrl),   // null → "" — এখনো upload হয়নি
 
         // num(v) — null/undefined → "", number → string
-        // Number input binding-এর জন্য (input সবসময় string নেয়)
-        price: num(data?.price),  // 1200 → "1200"
-        stock: num(data?.stock),  // 50 → "50"
+        // s-number-field ও s-money-field সবসময় string value নেয়।
+        // Submit-এর সময় server-এ number হিসেবে পাঠানো যাবে।
+        price: num(data?.price),   // 1200 → "1200"
+        stock: num(data?.stock),   // 50 → "50"
 
         // bool(v) — null/undefined → false
-        // Checkbox / toggle field-এর জন্য
+        // s-checkbox-এর checked prop সবসময় boolean চায়।
         isActive:   bool(data?.isActive),
         isFeatured: bool(data?.isFeatured),
 
         // obj(v, fallback) — null/undefined বা non-object → fallback
-        // Nested object-এর জন্য — server-এ না থাকলে fallback use হবে
-        address: obj(data?.address, { city: "", zip: "", country: "" }),
-        seo:     obj(data?.seo,     { title: "", description: "" }),
+        // Server-এ address না থাকলে fallback use হবে।
+        // এতে form-এ address.city, address.zip সবসময় defined থাকবে।
+        address: obj(data?.address,    { city: "", zip: "", country: "" }),
+        seo:     obj(data?.seo,        { title: "", description: "" }),
 
-        // Dynamic keys — কতটা key আছে জানা নেই, {} দিয়ে safe করো
+        // Dynamic key object — কতটা key আছে জানা নেই
+        // {} fallback দাও যাতে Object.entries() কাজ করে
         socialLinks: obj(data?.socialLinks, {}),
 
-        // arr(v, fallback) — null/undefined/empty → fallback (default [])
-        // Array field-এর জন্য
+        // arr(v, fallback) — null/undefined/empty → []
+        // .map() call করতে গেলে array হওয়া দরকার।
+        // Server-এ null আসলে [] হবে, crash হবে না।
         tags:     arr(data?.tags),
         sections: arr(data?.sections),
         variants: arr(data?.variants),
@@ -164,31 +189,22 @@ function buildShape(data) {
 /* ════════════════════════════════════════════════════════════════════════════
  * ███ 3. Zod Schema (optional)
  *
- * validate option-এর আগে run হয়।
- * Conflict হলে validate function জেতে।
- *
- * z.coerce.number() — string input ("1200") কে number-এ convert করে validate করে।
- * এটা দরকার কারণ number input-এ value সবসময় string হিসেবে আসে।
+ * submit() বা validate.now() call হলে আগে এটা run হয়।
+ * তারপর validate function run হয় — conflict হলে validate জেতে।
+ * z.coerce.number() — string input ("1200") → number convert করে validate করে।
  * ════════════════════════════════════════════════════════════════════════════ */
 
 const schema = z.object({
-    // String field — min/max length
     title:       z.string().min(1, "Title required").max(100, "সর্বোচ্চ ১০০ character"),
     description: z.string().min(20, "কমপক্ষে ২০ character").max(1000, "সর্বোচ্চ ১০০০ character"),
-
-    // Email format check
-    email: z.string().email("Valid email দাও"),
-
-    // Phone — optional, empty string allow করো
-    phone: z.string().regex(/^\+?[0-9]{10,15}$/, "Valid phone number দাও").optional().or(z.literal("")),
-
-    // Number — string input থেকে coerce করে validate
-    price: z.coerce.number().positive("০ এর বেশি হতে হবে"),
-    stock: z.coerce.number().min(0, "০ এর কম হবে না"),
+    email:       z.string().email("Valid email দাও"),
+    phone:       z.string().regex(/^\+?[0-9]{10,15}$/, "Valid phone number দাও").or(z.literal("")),
+    price:       z.coerce.number().positive("০ এর বেশি হতে হবে"),
+    stock:       z.coerce.number().min(0, "০ এর কম হবে না"),
 });
 
 /* ════════════════════════════════════════════════════════════════════════════
- * ███ 4. Component — সব feature একসাথে
+ * ███ 4. Component
  * ════════════════════════════════════════════════════════════════════════════ */
 
 export function ProductForm() {
@@ -198,45 +214,45 @@ export function ProductForm() {
      * useFormState setup — সব options সহ
      *
      * Parameter:
-     *   1. loaderData   — server থেকে আসা raw data
-     *   2. buildShape   — data → form shape করার pure function
-     *   3. options      — validation, submit, history, debug ইত্যাদি
+     *   1. loaderData  — server থেকে আসা raw data (null/undefined হতে পারে)
+     *   2. buildShape  — data → form shape করার pure function
+     *   3. options     — validation, submit, history, debug ইত্যাদি
      * ──────────────────────────────────────────────────────────────────────── */
 
     const fs = useFormState(loaderData, buildShape, {
 
-        /* ── schema ──────────────────────────────────────────────────────────
-         * Zod (বা safeParse compatible) schema।
-         * submit() বা validate.now() call হলে এটা আগে run হয়।
-         * Shorthand: { schema } মানে { schema: schema }
-         * ─────────────────────────────────────────────────────────────────── */
+        // ── schema ────────────────────────────────────────────────────────────
+        // Zod schema — submit() বা validate.now() call হলে সবার আগে run হয়।
+        // safeParse() use করে — throw করে না, error object return করে।
+        // Shorthand: { schema } মানে { schema: schema }
         schema,
 
-        /* ── validate ────────────────────────────────────────────────────────
-         * Manual validation function।
-         * Schema-র পরে run হয় — conflict হলে এটা জেতে।
-         * Schema-তে যা handle করা যায় না (cross-field check, async-এর পরে) সেটা এখানে।
-         *
-         * Receives: current form values
-         * Returns:  { [dot.path]: "error message" } — empty object মানে valid
-         * ─────────────────────────────────────────────────────────────────── */
+        // ── validate ──────────────────────────────────────────────────────────
+        // Manual validate function — schema-র পরে run হয়।
+        // Schema-তে express করা যায় না এমন rule এখানে লিখো:
+        //   — cross-field validation (একটা field অন্যটার উপর নির্ভর করে)
+        //   — conditional rule (active হলে price required)
+        //   — custom business logic
+        // Conflict হলে এই function-এর error জেতে।
+        // Receives: current form values
+        // Returns:  { "dot.path": "error message" } — empty = valid
         validate: (values) => {
             const errors = {};
 
-            // Custom rule — schema-তে এটা express করা যায় না
+            // Custom rule — schema-তে express করা যায় না
             if (values.title === "Test Product") {
                 errors.title = "এই নামে product আগে থেকেই আছে";
             }
 
             // Cross-field check — variant price, main price-এর দ্বিগুণ হতে পারবে না
-            // Nested array-র error key: "variants.0.price", "variants.1.price"
+            // Nested array error key: "variants.0.price", "variants.1.price"
             values.variants.forEach((v, i) => {
                 if (Number(v.price) > Number(values.price) * 2) {
                     errors[`variants.${i}.price`] = "Main price-এর দ্বিগুণের বেশি হবে না";
                 }
             });
 
-            // FAQ answer minimum length check
+            // Nested array item-level validation
             values.faqItems.forEach((f, i) => {
                 if (f.answer && f.answer.length < 5) {
                     errors[`faqItems.${i}.answer`] = "কমপক্ষে ৫ character লিখতে হবে";
@@ -246,80 +262,72 @@ export function ProductForm() {
             return errors;
         },
 
-        /* ── validateOnChange ────────────────────────────────────────────────
-         * true  — প্রতিটা keystroke-এ validation run হবে (real-time feedback)
-         * false — শুধু onBlur বা submit-এ validate হবে (default, better UX)
-         *
-         * Large form-এ true করলে performance hit হতে পারে।
-         * ─────────────────────────────────────────────────────────────────── */
+        // ── validateOnChange ──────────────────────────────────────────────────
+        // false (default) — শুধু onBlur বা submit-এ validate হয়। Better UX।
+        // true  — প্রতি keystroke-এ validation run হয়। Real-time feedback।
+        //         Large form বা complex schema-তে performance hit হতে পারে।
         validateOnChange: false,
 
-        /* ── onSubmit ────────────────────────────────────────────────────────
-         * Validation pass হলে submit() call করলে এটা run হয়।
-         *
-         * Receives:
-         *   values       — current form values (clean, normalized)
-         *   pendingFiles — { slotName: File[] } নতুন upload করা files
-         *   removedKeys  — { urlFieldPath: true } DB-তে null করার flags
-         *
-         * Promise return করলে resolve/reject পর্যন্ত isSubmitting = true থাকে।
-         * ─────────────────────────────────────────────────────────────────── */
+        // ── onSubmit ──────────────────────────────────────────────────────────
+        // Validation pass হলে submit() call করলে এটা run হয়।
+        // isSubmitting = true হয়, await শেষ হলে false হয়।
+        //
+        // Receives:
+        //   values       — current form values (normalized, clean)
+        //   pendingFiles — { slotName: File[] } নতুন upload করা files
+        //                  values-এ serialize হয় না তাই আলাদা আসে
+        //   removedKeys  — { urlFieldPath: true } DB-তে null করার flags
+        //                  fs.media.removeExisting() call হলে এখানে আসে
         onSubmit: async (values, { pendingFiles, removedKeys }) => {
             const fd = new FormData();
 
             // সব form values JSON-এ পাঠাও
             fd.append("data", JSON.stringify(values));
 
-            // Single URL field null করার flags
             // removedKeys: { "avatarUrl": true } মানে server-এ avatarUrl = null করো
+            // Server এই flag দেখে DB-তে null করবে
             fd.append("removedMedia", JSON.stringify(removedKeys));
 
-            // নতুন uploaded files — slot name দিয়ে আলাদা করো
+            // Single file — avatar slot থেকে প্রথম file নাও
             if (pendingFiles["avatar"]?.[0]) fd.append("avatar", pendingFiles["avatar"][0]);
             if (pendingFiles["cover"]?.[0])  fd.append("cover",  pendingFiles["cover"][0]);
+
+            // Multiple files — gallery slot থেকে সব file নাও
+            // Server-এ `gallery_0`, `gallery_1` key দিয়ে parse করো
+            (pendingFiles["gallery"] ?? []).forEach((file, i) => {
+                fd.append(`gallery_${i}`, file);
+            });
 
             fetcher.submit(fd, { method: "POST", encType: "multipart/form-data" });
         },
 
-        /* ── syncOnServerDataChange ───────────────────────────────────────────
-         * true  (default) — loaderData reference বদলালে form + snapshot auto re-init হয়।
-         *                   Page reload বা navigation-এ fresh data আসলে automatically sync হয়।
-         * false — নিজে syncAfterSave() manually call করতে চাইলে false করো।
-         * ─────────────────────────────────────────────────────────────────── */
+        // ── syncOnServerDataChange ────────────────────────────────────────────
+        // true  (default) — loaderData reference বদলালে form + snapshot auto re-init।
+        //                   Page reload বা navigation-এ fresh data আসলে automatically sync।
+        // false — নিজে syncAfterSave() manually call করতে চাইলে।
         syncOnServerDataChange: true,
 
-        /* ── historyLimit ────────────────────────────────────────────────────
-         * 0       (default) — undo/redo disabled, history রাখে না।
-         * 1-100   — এতটা step পর্যন্ত undo/redo করা যাবে।
-         *
-         * বেশি দিলে memory বেশি লাগে। 20-50 practical range।
-         * ─────────────────────────────────────────────────────────────────── */
+        // ── historyLimit ──────────────────────────────────────────────────────
+        // 0 (default) — undo/redo disabled, history রাখে না, extra memory নেই।
+        // 50          — সর্বোচ্চ ৫০ step undo/redo করা যাবে।
+        //               বেশি দিলে memory বেশি লাগে। 20-50 practical range।
         historyLimit: 50,
 
-        /* ── debug ───────────────────────────────────────────────────────────
-         * true  — সব state change console-এ log হবে। Development-এ কাজে লাগে।
-         * false (default) — কোনো log নেই। Production-এ false রাখো।
-         * ─────────────────────────────────────────────────────────────────── */
+        // ── debug ─────────────────────────────────────────────────────────────
+        // true  — সব state change console-এ log হবে। Development-এ কাজে লাগে।
+        //         Console output: [ProductForm] set("title") → { ...newValues }
+        // false (default) — কোনো log নেই। Production-এ false রাখো।
         debug: true,
 
-        /* ── debugLabel ──────────────────────────────────────────────────────
-         * Console log-এর prefix label।
-         * একই page-এ একাধিক form থাকলে কোন form-এর log সেটা বোঝা যায়।
-         * Example log: [ProductForm] set("title") → { ... }
-         * ─────────────────────────────────────────────────────────────────── */
+        // ── debugLabel ────────────────────────────────────────────────────────
+        // Console log-এর prefix label।
+        // একই page-এ একাধিক form থাকলে কোন form-এর log সেটা বোঝা যাবে।
         debugLabel: "ProductForm",
     });
 
     /* ────────────────────────────────────────────────────────────────────────
      * Successful save-এর পর snapshot sync করো।
-     *
-     * কেন দরকার?
-     *   save হওয়ার পর isDirty = false হওয়া উচিত।
-     *   syncAfterSave() snapshot-কে fresh server data দিয়ে update করে।
-     *   তারপর form === snapshot হয়, তাই isDirty = false।
-     *
-     * syncOnServerDataChange: true থাকলে loaderData বদলালে auto হয়,
-     * তবে fetcher-এ directly call করলে আরো নির্ভরযোগ্য।
+     * isDirty = false হবে।
      * ──────────────────────────────────────────────────────────────────────── */
     // useEffect(() => {
     //     if (fetcher.state === "idle" && fetcher.data?.product) {
@@ -330,887 +338,1460 @@ export function ProductForm() {
     /* ────────────────────────────────────────────────────────────────────────
      * fs.field.compute — title বদলালে seo.title auto-update করো।
      *
-     * ⚠️  Component-এর top level-এ call করো — condition বা loop-এর ভেতরে না।
-     *     Hook-এর নিয়ম অনুযায়ী useEffect top-level-এ থাকতে হয়।
+     * কীভাবে কাজ করে:
+     *   deps (["title"]) array-এর values watch করে।
+     *   title বদলালে computeFn(values) run হয়।
+     *   Result "seo.title" field-এ automatically set হয়।
+     *
+     * ⚠️  Component-এর top level-এ call করো।
+     *     React-এর hook rule — condition বা loop-এর ভেতরে call করা যাবে না।
+     *     ভেতরে useEffect আছে তাই এই নিয়ম apply হয়।
      *
      * Parameters:
-     *   1. "seo.title"     — কোন field-এ result বসবে
-     *   2. computeFn       — current values নিয়ে computed value return করে
-     *   3. ["title"]       — কোন field change হলে recompute হবে
+     *   1. "seo.title"  — computed value কোন field-এ বসবে
+     *   2. computeFn    — values নিয়ে computed value return করে
+     *   3. ["title"]    — কোন field বদলালে recompute হবে
      * ──────────────────────────────────────────────────────────────────────── */
     fs.field.compute(
         "seo.title",
         (values) => values.title ? `${values.title} — My Store` : "",
         ["title"]
+        // title: "Handmade Leather Bag" → seo.title: "Handmade Leather Bag — My Store"
+        // title: "" → seo.title: ""
     );
 
     /* ────────────────────────────────────────────────────────────────────────
-     * fs.field.watch — isActive false হলে isFeatured reset করো।
+     * fs.field.watch — isActive false হলে isFeatured auto-reset করো।
+     *
+     * কীভাবে কাজ করে:
+     *   "isActive" field watch করে।
+     *   বদলালে callback(newValue, prevValue) call হয়।
+     *   Side effect run করো — এখানে isFeatured reset।
      *
      * ⚠️  Component-এর top level-এ call করো।
-     *
-     * Use case:
-     *   Product inactive হলে featured থাকার মানে নেই।
-     *   isActive বদলালে এই callback run হয়।
+     *     ভেতরে useEffect আছে — hook rule apply হয়।
      *
      * Parameters:
      *   1. "isActive"  — কোন field watch করবে
      *   2. callback    — (newValue, prevValue) receive করে
      * ──────────────────────────────────────────────────────────────────────── */
-    fs.field.watch("isActive", (next) => {
-        if (!next) fs.set("isFeatured", false);
+    fs.field.watch("isActive", (next, prev) => {
+        // isActive: true → false হলে featured reset করো
+        // featured product inactive থাকার মানে নেই
+        if (!next && prev) fs.set("isFeatured", false);
     });
 
     /* ════════════════════════════════════════════════════════════════════════
-     * JSX — প্রতিটা feature-এর usage
+     * JSX — Polaris Web Components দিয়ে
      * ════════════════════════════════════════════════════════════════════════ */
 
     return (
-        <div>
+        // ── s-page — main page wrapper ────────────────────────────────────────
+        // heading    — page-এর title, Shopify admin-এ দেখায়
+        // Slots:
+        //   slot="primary-action"    — page header-এর right-এ primary button
+        //   slot="secondary-actions" — primary-র পাশে secondary buttons
+        //   slot="breadcrumb-actions"— back navigation (s-link only)
+        //   children (default)       — main page content
+        <s-page heading="Edit Product">
 
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.values — live form values read
+            {/* ── primary-action slot ────────────────────────────────────────
+              * Page header-এ right-এ দেখায়।
+              * শুধু variant="primary" button accept করে।
               *
-              * fs.values সবসময় latest form state reflect করে।
-              * শুধু read করো — update করতে fs.set() use করো।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Scalar field — fs.values.title → "Handmade Leather Bag" */}
-            <p>Current title: {fs.values.title}</p>
-
-            {/* Nested field — fs.values.address.city → "Dhaka" */}
-            <p>City: {fs.values.address.city}</p>
-
-            {/* Array item field — fs.values.sections[0].heading → "Features" */}
-            <p>First section: {fs.values.sections[0]?.heading}</p>
-
-            {/* Boolean field — fs.values.isActive → true */}
-            <p>Active: {String(fs.values.isActive)}</p>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.set — যেকোনো depth-এ value set
-              *
-              * Dot-path দিয়ে যেকোনো level-এ value update করো।
-              * React state immutably update হয়, re-render trigger হয়।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Top-level scalar field */}
-            <button onClick={() => fs.set("title", "New Title")}>
-                Set title {/* fs.values.title → "New Title" */}
-            </button>
-
-            {/* Nested object field */}
-            <button onClick={() => fs.set("address.city", "Chittagong")}>
-                Set city {/* fs.values.address.city → "Chittagong" */}
-            </button>
-
-            {/* Deeply nested — section → block → content */}
-            <button onClick={() => fs.set("sections.0.blocks.0.content", "Updated content")}>
-                Set block content {/* fs.values.sections[0].blocks[0].content → "Updated content" */}
-            </button>
-
-            {/* Array item field — index দিয়ে */}
-            <button onClick={() => fs.set("variants.1.price", 1300)}>
-                Set medium variant price {/* fs.values.variants[1].price → 1300 */}
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.get — live form থেকে value read
-              *
-              * fs.values.x দিয়েও read করা যায়।
-              * fs.get() কাজে লাগে যখন path dynamic বা computed।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Static path */}
-            <button onClick={() => console.log(fs.get("title"))}>
-                Log title {/* → "Handmade Leather Bag" */}
-            </button>
-
-            {/* Nested path */}
-            <button onClick={() => console.log(fs.get("address.city"))}>
-                Log city {/* → "Dhaka" */}
-            </button>
-
-            {/* Array item — index দিয়ে */}
-            <button onClick={() => console.log(fs.get("variants.1.price"))}>
-                Log variant 2 price {/* → "1200" */}
-            </button>
-
-            {/* Dynamic path — runtime-এ path তৈরি হয় */}
-            <button onClick={() => {
-                const fieldName = "title"; // runtime-এ decide হতে পারে
-                console.log(fs.get(fieldName));
-            }}>
-                Log dynamic field
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.setMany — batch update, একটা render-এ
-              *
-              * আলাদা আলাদা fs.set() call করলে প্রতিটায় re-render হয়।
-              * setMany একটা render-এ সব update করে — performance better।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Multiple related field একসাথে update */}
-            <button onClick={() => fs.setMany([
-                ["title",           "Premium Leather Bag"],
-                ["seo.title",       "Premium Leather Bag — My Store"],
-                ["seo.description", "Buy premium leather bags."],
-            ])}>
-                Update title + SEO {/* তিনটা field একটা render-এ update */}
-            </button>
-
-            {/* Product activate + price update একসাথে */}
-            <button onClick={() => fs.setMany([
-                ["isActive", true],
-                ["price",    1500],
-                ["stock",    100],
-            ])}>
-                Activate with new price
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.merge — partial object shallow-merge
-              *
-              * Object-এর কিছু field update করতে চাইলে merge use করো।
-              * বাকি field গুলো unchanged থাকে।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Nested object-এর partial update */}
-            <button onClick={() => fs.merge({ city: "Sylhet", zip: "3100" }, "address")}>
-                Update address
-                {/*
-                  * address.city → "Sylhet", address.zip → "3100"
-                  * address.country → "BD" (unchanged)
-                  */}
-            </button>
-
-            {/* Root-এ merge — multiple top-level fields */}
-            <button onClick={() => fs.merge({ isActive: true, isFeatured: true })}>
-                Activate + Feature
-                {/*
-                  * isActive → true, isFeatured → true
-                  * বাকি সব field unchanged
-                  */}
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.field.bind — Polaris TextField-এর সব props একসাথে
-              *
-              * bind() return করে: { value, onChange, onBlur, error }
-              * Spread করলে TextField-এ সব manually লিখতে হয় না।
-              *
-              * Equivalent:
-              *   value={fs.values.title}
-              *   onChange={v => fs.set("title", v)}
-              *   onBlur={() => fs.field.touch("title")}
-              *   error={fs.field.error("title")}
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Top-level field */}
-            <TextField label="Title"       {...fs.field.bind("title")} />
-            <TextField label="Description" {...fs.field.bind("description")} multiline={4} />
-            <TextField label="Email"       {...fs.field.bind("email")} type="email" />
-            <TextField label="Phone"       {...fs.field.bind("phone")} />
-
-            {/* Nested object field */}
-            <TextField label="SEO Title"   {...fs.field.bind("seo.title")} />
-            <TextField label="City"        {...fs.field.bind("address.city")} />
-            <TextField label="ZIP"         {...fs.field.bind("address.zip")} />
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.field.bindNumber — number input binding
-              *
-              * Number input-এ value সবসময় string হিসেবে আসে।
-              * bindNumber() onChange-এ string → number convert করে।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* value="1200" (string), onChange-এ Number("1300") = 1300 store হয় */}
-            <TextField label="Price" type="number" {...fs.field.bindNumber("price")} />
-            <TextField label="Stock" type="number" {...fs.field.bindNumber("stock")} />
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.field.bindCheckbox — Polaris Checkbox binding
-              *
-              * bind() return করে: { checked, onChange, onBlur, error }
-              * ══════════════════════════════════════════════════════════════ */}
-
-            <Checkbox label="Active"   {...fs.field.bindCheckbox("isActive")} />
-            <Checkbox label="Featured" {...fs.field.bindCheckbox("isFeatured")} />
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.field.toggle — boolean field flip করো
-              *
-              * fs.set("isActive", !fs.values.isActive) এর shortcut।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* true → false, false → true */}
-            <button onClick={() => fs.field.toggle("isActive")}>
-                Toggle active ({String(fs.values.isActive)})
-            </button>
-
-            {/* Nested boolean */}
-            <button onClick={() => fs.field.toggle("seo.enabled")}>
-                Toggle SEO {/* seo.enabled: false → true */}
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.field.increment / fs.field.decrement — numeric shortcut
-              *
-              * Default step = 1। Custom step দেওয়া যায়।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Default step = 1 */}
-            <button onClick={() => fs.field.decrement("stock")}>-</button>
-            <span>{fs.values.stock}</span>  {/* 50 → 49 */}
-            <button onClick={() => fs.field.increment("stock")}>+</button>
-
-            {/* Custom step = 100 */}
-            <button onClick={() => fs.field.decrement("price", 100)}>-100</button>
-            <span>{fs.values.price}</span>  {/* 1200 → 1100 */}
-            <button onClick={() => fs.field.increment("price", 100)}>+100</button>
-
-            {/* Nested field — variant-এর stock */}
-            <button onClick={() => fs.field.decrement("variants.0.stock", 5)}>
-                Variant 1 stock -5 {/* variants[0].stock: 20 → 15 */}
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.field.error — error message দেখাও
-              *
-              * শুধু দেখায় যদি:
-              *   — field touch হয়েছে (onBlur call হয়েছে), অথবা
-              *   — submit attempt হয়েছে (submitCount > 0)
-              *
-              * fs.field.bind() use করলে এটা automatically handle হয়।
-              * Manually দরকার হলে এভাবে use করো:
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* null হলে কিছু দেখাবে না */}
-            <p style={{ color: "red" }}>{fs.field.error("title")}</p>
-            <p style={{ color: "red" }}>{fs.field.error("email")}</p>
-            <p style={{ color: "red" }}>{fs.field.error("variants.0.price")}</p>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.field.touch / fs.field.untouch / fs.field.isTouched
-              *
-              * Touch = user এই field-এ interact করেছে।
-              * onBlur-এ touch করো → তারপর error দেখানো শুরু হয়।
-              *
-              * fs.field.bind() use করলে onBlur automatically handle হয়।
-              * Manually দরকার হলে:
-              * ══════════════════════════════════════════════════════════════ */}
-
-            <input
-                value={fs.values.title}
-                onChange={e => fs.set("title", e.target.value)}
-                onBlur={() => fs.field.touch("title")}  {/* touch mark করো */}
-            />
-            {/* touch হলে "Edited" দেখাও */}
-            {fs.field.isTouched("title") && <span>Edited</span>}
-
-            {/* Untouch — touched mark সরাও */}
-            <button onClick={() => fs.field.untouch("title")}>
-                Untouch title
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.field.setError / fs.field.clearError / fs.field.clearAllErrors
-              *
-              * Server থেকে আসা error manually set করো।
-              * যেমন: action থেকে validation error এলে inject করো।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Server error inject */}
-            <button onClick={() => fs.field.setError("email", "এই email আগে থেকেই নেওয়া")}>
-                Simulate server error {/* fs.field.error("email") → "এই email আগে থেকেই নেওয়া" */}
-            </button>
-
-            {/* একটা field-এর error clear */}
-            <button onClick={() => fs.field.clearError("email")}>
-                Clear email error
-            </button>
-
-            {/* সব error একসাথে clear */}
-            <button onClick={() => fs.field.clearAllErrors()}>
-                Clear all errors
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.field.isDirty — per-field dirty check
-              *
-              * এই specific field বা subtree snapshot থেকে আলাদা হয়েছে কিনা।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Scalar field */}
-            {fs.field.isDirty("title") && <Badge>Title changed</Badge>}
-
-            {/* Subtree check — address-এর যেকোনো child বদলালে true */}
-            {fs.field.isDirty("address") && <Badge>Address changed</Badge>}
-
-            {/* Array item field */}
-            {fs.field.isDirty("variants.0.price") && <Badge>Variant 1 price changed</Badge>}
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.dirtyFields — সব changed leaf field-এর map
-              *
-              * { "title": true, "address.city": true, "variants.0.price": true }
-              * Section-level dirty count বা custom UI-তে কাজে লাগে।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Changed field-এর list দেখাও */}
-            <p>Changed: {Object.keys(fs.dirtyFields).join(", ")}</p>
-
-            {/* Section-এর কতটা field dirty */}
-            <p>
-                SEO dirty fields: {
-                    Object.keys(fs.dirtyFields).filter(k => k.startsWith("seo.")).length
-                }
-            </p>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.fieldErrors — সব error-এর raw map
-              *
-              * { "title": "Required", "email": "Invalid email" }
-              * fs.field.error() touch/submit check করে দেখায়।
-              * fieldErrors সরাসরি দেখলে সব error পাবে — debug বা summary UI-তে।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Error summary — submit attempt-এর পরে দেখাও */}
-            {fs.submitCount > 0 && Object.keys(fs.fieldErrors).length > 0 && (
-                <div style={{ border: "1px solid red", padding: 8 }}>
-                    <p>Please fix these errors:</p>
-                    {Object.entries(fs.fieldErrors).map(([path, msg]) => (
-                        <p key={path}>• {path}: {msg}</p>
-                    ))}
-                </div>
-            )}
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.touchedFields — সব touched field-এর raw map
-              *
-              * { "title": true, "email": true }
-              * fs.field.isTouched() একটা field check করে।
-              * touchedFields সরাসরি দেখলে সব touched field পাবে।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* কতটা field touch হয়েছে */}
-            <p>Touched fields: {Object.keys(fs.touchedFields).length}</p>
-
-            {/* Custom touched indicator */}
-            {fs.touchedFields["email"] && <span>Email edited</span>}
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.list — array operations যেকোনো depth-এ
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* ── append — array-এর শেষে item add করো ─────────────────────── */}
-            {/* Object item deep-clone হয়, template mutate হয় না */}
-            <button onClick={() => fs.list.append("tags", { id: Date.now(), name: "", color: "blue" })}>
-                Add tag {/* tags array-এর শেষে নতুন item যোগ হবে */}
-            </button>
-
-            {/* ── prepend — array-এর শুরুতে item add করো ──────────────────── */}
-            <button onClick={() => fs.list.prepend("faqItems", { id: Date.now(), question: "", answer: "", sortOrder: 0 })}>
-                Add FAQ at top {/* faqItems[0]-এ নতুন item আসবে */}
-            </button>
-
-            {/* ── insert — নির্দিষ্ট index-এ item insert করো ───────────────── */}
-            <button onClick={() => fs.list.insert("sections", 1, { id: Date.now(), heading: "New Section", sortOrder: 1, blocks: [] })}>
-                Insert section at index 1 {/* sections[1]-এ নতুন section, বাকি গুলো shift হবে */}
-            </button>
-
-            {/* ── bindItem — row-এর সব helper একসাথে ───────────────────────── */}
-            {/*
-              * bindItem() return করে:
-              *   value    — এই item-এর current data
-              *   index    — array-তে এর position
-              *   isFirst  — প্রথম item কিনা
-              *   isLast   — শেষ item কিনা
-              *   isDirty  — এই item snapshot থেকে আলাদা হয়েছে কিনা
-              *   setField — এই item-এর একটা field update করো
-              *   replace  — পুরো item replace করো
-              *   remove   — এই item বাদ দাও
-              *   duplicate— clone করে পরে insert করো
-              *   moveUp   — একটা position উপরে যাও
-              *   moveDown — একটা position নিচে যাও
-              */}
-            {fs.values.tags.map((tag, i) => {
-                const item = fs.list.bindItem("tags", i);
-                return (
-                    <div key={tag.id}>
-                        {/* setField — এই item-এর একটা field update */}
-                        <input
-                            value={item.value.name}
-                            onChange={e => item.setField("name", e.target.value)}
-                            placeholder="Tag name"
-                        />
-                        <input
-                            value={item.value.color}
-                            onChange={e => item.setField("color", e.target.value)}
-                            placeholder="Color"
-                        />
-
-                        {/* remove — এই item বাদ দাও */}
-                        <button onClick={item.remove}>✕</button>
-
-                        {/* duplicate — clone করে ঠিক পরে insert */}
-                        <button onClick={item.duplicate}>Copy</button>
-
-                        {/* moveUp/moveDown — isFirst/isLast দিয়ে disable করো */}
-                        <button onClick={item.moveUp}   disabled={item.isFirst}>↑</button>
-                        <button onClick={item.moveDown} disabled={item.isLast}>↓</button>
-
-                        {/* isDirty — এই specific row change হয়েছে কিনা */}
-                        {item.isDirty && <span>Changed</span>}
-                    </div>
-                );
-            })}
-
-            {/* ── Nested array — section-এর ভেতরে blocks ───────────────────── */}
-            {/*
-              * Path: "sections.0.blocks", "sections.1.blocks" — dynamic
-              * si (section index) দিয়ে path build করো
-              */}
-            {fs.values.sections.map((section, si) => {
-                const sectionItem = fs.list.bindItem("sections", si);
-                return (
-                    <div key={section.id}>
-                        {/* Section heading update */}
-                        <input
-                            value={sectionItem.value.heading}
-                            onChange={e => sectionItem.setField("heading", e.target.value)}
-                            placeholder="Section heading"
-                        />
-                        <button onClick={sectionItem.remove}>Remove section</button>
-                        <button onClick={sectionItem.moveUp}   disabled={sectionItem.isFirst}>↑</button>
-                        <button onClick={sectionItem.moveDown} disabled={sectionItem.isLast}>↓</button>
-
-                        {/* Nested blocks — path: "sections.{si}.blocks" */}
-                        {section.blocks.map((block, bi) => {
-                            // Path dynamically build হচ্ছে — যেকোনো depth-এ কাজ করে
-                            const blockItem = fs.list.bindItem(`sections.${si}.blocks`, bi);
-                            return (
-                                <div key={block.id}>
-                                    <input
-                                        value={blockItem.value.content ?? ""}
-                                        onChange={e => blockItem.setField("content", e.target.value)}
-                                        placeholder="Block content"
-                                    />
-                                    <button onClick={blockItem.remove}>Remove block</button>
-                                </div>
-                            );
-                        })}
-
-                        {/* Nested array-তে append — path dynamic */}
-                        <button onClick={() => fs.list.append(`sections.${si}.blocks`, { id: Date.now(), type: "text", content: "" })}>
-                            Add block
-                        </button>
-                    </div>
-                );
-            })}
-
-            {/* ── swap — দুটো item position exchange করো ────────────────────── */}
-            <button onClick={() => fs.list.swap("variants", 0, 1)}>
-                Swap variant 1 and 2 {/* variants[0] ↔ variants[1] */}
-            </button>
-
-            {/* ── move — item এক position থেকে অন্য position-এ নিয়ে যাও ─── */}
-            <button onClick={() => fs.list.move("variants", 2, 0)}>
-                Move variant 3 to top {/* variants[2] → variants[0], বাকি shift হবে */}
-            </button>
-
-            {/* ── sort — field দিয়ে sort করো ───────────────────────────────── */}
-            <button onClick={() => fs.list.sort("variants", "price", "asc")}>
-                Sort by price ↑ {/* Small(1000), Medium(1200), Large(1500) */}
-            </button>
-            <button onClick={() => fs.list.sort("variants", "price", "desc")}>
-                Sort by price ↓ {/* Large(1500), Medium(1200), Small(1000) */}
-            </button>
-            <button onClick={() => fs.list.sort("variants", "name", "asc")}>
-                Sort by name A→Z
-            </button>
-
-            {/* ── reorder + normalizeOrder — drag-drop-এর পরে ──────────────── */}
-            {/*
-              * reorder() — item সরায় (move-এর alias, drag-drop context-এ readable)
-              * normalizeOrder() — sortOrder field 0,1,2... re-stamp করে
-              *                    DB-তে order save করতে দরকার
-              */}
-            <button onClick={() => {
-                fs.list.reorder("faqItems", 1, 0); // FAQ 2 → position 0
-                fs.list.normalizeOrder("faqItems", "sortOrder"); // sortOrder: 0,1 re-stamp
-            }}>
-                Move FAQ 2 to top + fix order
-            </button>
-
-            {/* ── filter — condition match করা গুলো রাখো, বাকি বাদ ────────── */}
-            <button onClick={() => fs.list.filter("tags", tag => tag.name !== "")}>
-                Remove empty tags {/* name="" tags গুলো বাদ যাবে */}
-            </button>
-            <button onClick={() => fs.list.filter("variants", v => Number(v.stock) > 0)}>
-                Remove out-of-stock variants
-            </button>
-
-            {/* ── updateWhere — condition match করা সব item-এ patch apply ──── */}
-            <button onClick={() => fs.list.updateWhere(
-                "variants",
-                v => Number(v.stock) === 0,         // condition
-                { name: "Out of Stock" }             // এই patch apply হবে
-            )}>
-                Mark out-of-stock variants
-            </button>
-
-            {/* ── find — condition দিয়ে item খোঁজো ─────────────────────────── */}
-            <button onClick={() => {
-                const medium = fs.list.find("variants", v => v.name === "Medium");
-                console.log("Medium variant:", medium);
-                // → { id: "v2", name: "Medium", price: 1200, stock: 50, sortOrder: 1 }
-            }}>
-                Find medium variant
-            </button>
-
-            {/* ── findIndex — condition দিয়ে index খোঁজো ───────────────────── */}
-            <button onClick={() => {
-                // id দিয়ে খুঁজে remove করো — index manually track করতে হয় না
-                const idx = fs.list.findIndex("variants", v => v.id === "v2");
-                console.log("Medium index:", idx); // → 1
-                if (idx !== -1) fs.list.remove("variants", idx);
-            }}>
-                Remove medium variant by id
-            </button>
-
-            {/* ── replace — পুরো item replace করো ─────────────────────────── */}
-            <button onClick={() => fs.list.replace("variants", 0, { id: "v1", name: "XS", price: 800, stock: 5, sortOrder: 0 })}>
-                Replace first variant {/* variants[0] পুরোটা নতুন object দিয়ে replace */}
-            </button>
-
-            {/* ── duplicate — item clone করে ঠিক পরে insert ───────────────── */}
-            <button onClick={() => fs.list.duplicate("sections", 0)}>
-                Duplicate first section {/* sections[0]-এর deep clone → sections[1] */}
-            </button>
-
-            {/* ── set — পুরো array replace করো ─────────────────────────────── */}
-            <button onClick={() => fs.list.set("tags", [{ id: "t_new", name: "new-tag", color: "red" }])}>
-                Replace all tags {/* tags array-টাই নতুন array দিয়ে replace */}
-            </button>
-
-            {/* ── clear — array empty করো ───────────────────────────────────── */}
-            <button onClick={() => fs.list.clear("tags")}>
-                Clear all tags {/* tags → [] */}
-            </button>
-            <button onClick={() => fs.list.clear("sections.0.blocks")}>
-                Clear first section blocks {/* sections[0].blocks → [] */}
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.object — dynamic key management
-              *
-              * Object-এ কতটা key থাকবে আগে জানা নেই — runtime-এ add/delete হয়।
-              * যেমন: socialLinks, metadata, settings ইত্যাদি।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* ── setKey — key add বা update করো ───────────────────────────── */}
-            <button onClick={() => fs.object.setKey("socialLinks", "tiktok", "https://tiktok.com/@mystore")}>
-                Add TikTok {/* socialLinks.tiktok = "https://..." — নতুন key */}
-            </button>
-            <button onClick={() => fs.object.setKey("socialLinks", "facebook", "https://facebook.com/newpage")}>
-                Update Facebook {/* socialLinks.facebook update */}
-            </button>
-
-            {/* ── deleteKey — key delete করো ────────────────────────────────── */}
-            <button onClick={() => fs.object.deleteKey("socialLinks", "instagram")}>
-                Remove Instagram {/* socialLinks থেকে instagram key বাদ */}
-            </button>
-
-            {/* Dynamic key list — Object.entries দিয়ে render করো */}
-            {Object.entries(fs.values.socialLinks).map(([platform, url]) => (
-                <div key={platform}>
-                    <span>{platform}:</span>
-                    {/* setKey দিয়ে value update করো */}
-                    <input
-                        value={url}
-                        onChange={e => fs.object.setKey("socialLinks", platform, e.target.value)}
-                    />
-                    {/* deleteKey দিয়ে key remove করো */}
-                    <button onClick={() => fs.object.deleteKey("socialLinks", platform)}>✕</button>
-                </div>
-            ))}
-
-            {/* ── removeField — যেকোনো depth-এ field delete করো ───────────── */}
-            {/* Object key delete (object.deleteKey-এর মতো, but any depth) */}
-            <button onClick={() => fs.object.removeField("address.zip")}>
-                Remove zip {/* address.zip field delete হবে */}
-            </button>
-
-            {/* Deeply nested field delete */}
-            <button onClick={() => fs.object.removeField("seo.description")}>
-                Remove SEO description
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.media — নতুন file upload + single URL field null করা
-              *
-              * দুটো আলাদা use case:
-              *   1. নতুন File object stage করা (values-এ রাখা যায় না)
-              *   2. Single URL string field (avatarUrl) null করা
-              *
-              * Image array manage করতে fs.list.remove() use করো — fs.media না।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* ── নতুন file upload ──────────────────────────────────────────── */}
-            {/*
-              * setterFor("avatar") — ImagePickerField-এর setValue prop-এ দাও।
-              * User file select করলে pendingFiles["avatar"] = [File] হবে।
-              * onSubmit-এ pendingFiles["avatar"][0] দিয়ে FormData-তে append করো।
-              */}
-            <ImagePickerField
-                label="Avatar"
-                value={fs.media.pendingFiles["avatar"] ?? []}  // staged files
-                setValue={fs.media.setterFor("avatar")}         // file select handler
-            />
-            {/* File select হলে clear button দেখাও */}
-            {fs.media.hasFile("avatar") && (
-                <button onClick={() => fs.media.clearFiles("avatar")}>
-                    Clear avatar {/* pendingFiles["avatar"] = [] */}
-                </button>
-            )}
-
-            {/* নতুন cover upload */}
-            <ImagePickerField
-                label="Cover Photo"
-                value={fs.media.pendingFiles["cover"] ?? []}
-                setValue={fs.media.setterFor("cover")}
-            />
-
-            {/* ── Existing single URL field null করা ───────────────────────── */}
-            {/*
-              * avatarUrl = "https://cdn.example.com/avatar.jpg" — একটা string field।
-              * User remove করলে:
-              *   — form-এ avatarUrl = "" হয়
-              *   — removedKeys["avatarUrl"] = true হয়
-              * onSubmit-এ removedKeys দেখে server DB-তে avatarUrl = null করে।
-              *
-              * কেন শুধু fs.set("avatarUrl", "") করলে হবে না?
-              *   Server জানবে না এটা ইচ্ছাকৃত null নাকি empty string।
-              *   removedKeys flag সেই distinction করে।
-              */}
-            {fs.values.avatarUrl && !fs.media.hasRemoved("avatarUrl") && (
-                <div>
-                    <img src={fs.values.avatarUrl} alt="Avatar" width={80} />
-                    <button onClick={() => fs.media.removeExisting("avatarUrl")}>
-                        Remove avatar {/* avatarUrl = "", removedKeys["avatarUrl"] = true */}
-                    </button>
-                </div>
-            )}
-
-            {/* Remove করলে undo option দেখাও */}
-            {fs.media.hasRemoved("avatarUrl") && (
-                <button onClick={() => fs.media.undoRemove("avatarUrl")}>
-                    Undo remove {/* avatarUrl snapshot থেকে restore, flag clear */}
-                </button>
-            )}
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.snapshot — saved baseline read
-              *
-              * snapshot = last saved/synced state।
-              * isDirty = current values !== snapshot।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* ── snapshot.get — একটা field-এর saved value পাও ────────────── */}
-            {/* "Revert this field only" UI বানাতে কাজে লাগে */}
-            <button onClick={() => fs.set("title", fs.snapshot.get("title"))}>
-                Revert title {/* snapshot-এর "Handmade Leather Bag"-এ ফিরে যাবে */}
-            </button>
-
-            {/* Nested field revert */}
-            <button onClick={() => fs.set("variants.0.price", fs.snapshot.get("variants.0.price"))}>
-                Revert variant 1 price {/* snapshot-এর 1000-এ ফিরে যাবে */}
-            </button>
-
-            {/* ── snapshot.getAll — পুরো snapshot object ───────────────────── */}
-            <button onClick={() => console.log(fs.snapshot.getAll())}>
-                Log snapshot {/* পুরো saved state console-এ দেখো */}
-            </button>
-
-            {/* ── snapshot.isDirty — isDirty-র alias ───────────────────────── */}
-            <p>Has unsaved changes: {String(fs.snapshot.isDirty)}</p>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.history — undo/redo
-              *
-              * options-এ historyLimit: 50 দেওয়া আছে, তাই active।
-              * historyLimit: 0 (default) হলে এগুলো কাজ করবে না।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* undo — আগের state-এ ফিরে যাও */}
-            <button onClick={fs.history.undo} disabled={!fs.history.canUndo}>
-                ↩ Undo ({fs.history.steps} steps available)
-                {/* canUndo = false হলে disabled — history empty */}
-            </button>
-
-            {/* redo — undo-র পরে আবার forward আসো */}
-            <button onClick={fs.history.redo} disabled={!fs.history.canRedo}>
-                ↪ Redo
-                {/* canRedo = false হলে disabled — future stack empty */}
-            </button>
-
-            {/* clear — history আর future stack দুটোই clear করো */}
-            <button onClick={fs.history.clear}>
-                Clear history
-            </button>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.validate — manual validation trigger
-              *
-              * submit() call করলে automatically validate হয়।
-              * Manually trigger করতে চাইলে এগুলো use করো।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* ── validate.now — পুরো form validate করো ────────────────────── */}
-            {/* true = valid, false = error আছে */}
-            <button onClick={() => {
-                const isValid = fs.validate.now();
-                if (isValid) {
-                    console.log("Form is valid, ready to submit");
-                } else {
-                    console.log("Errors:", fs.fieldErrors);
-                }
-            }}>
-                Validate now
-            </button>
-
-            {/* ── validate.field — single field validate করো ────────────────── */}
-            {/* onBlur-এ single field validate করো, error message return করে */}
-            <input
-                value={fs.values.email}
-                onChange={e => fs.set("email", e.target.value)}
-                onBlur={() => {
-                    const error = fs.validate.field("email");
-                    // error = "Valid email দাও" বা null
-                    console.log("Email error:", error);
-                }}
-            />
-            {/* validate.field() error state-এ set করে, তাই field.error() দিয়ে দেখানো যায় */}
-            <p style={{ color: "red" }}>{fs.field.error("email")}</p>
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.hasValidated — validation কোনোদিন run হয়েছে কিনা
-              *
-              * false = এখনো কোনো validation run হয়নি (submit বা validate.now)
-              * true  = অন্তত একবার validation run হয়েছে
-              *
-              * isValid সবসময় false হওয়া থেকে prevent করে —
-              * validation run-এর আগে isValid false থাকে।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* Validation run-এর আগে কিছু show করো না */}
-            {fs.hasValidated && (
-                fs.isValid
-                    ? <Badge tone="success">Form is valid</Badge>
-                    : <Badge tone="critical">Please fix errors</Badge>
-            )}
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.submitCount — কতবার submit attempt হয়েছে
-              *
-              * 0 = এখনো submit করা হয়নি।
-              * >0 = অন্তত একবার submit চেষ্টা হয়েছে।
-              *
-              * Error visibility control করতে কাজে লাগে।
-              * submitCount > 0 হলে সব error দেখাও (touched না হলেও)।
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {fs.submitCount > 0 && (
-                <p>Submit attempted {fs.submitCount} time(s)</p>
-            )}
-
-            {/* First submit-এর আগে error banner লুকাও */}
-            {fs.submitCount > 0 && Object.keys(fs.fieldErrors).length > 0 && (
-                <Banner tone="critical">Please fix the errors before saving.</Banner>
-            )}
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.isDirty / fs.isSubmitting / fs.isValid — core state
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* isDirty — কিছু change হয়েছে কিনা */}
-            {fs.isDirty && <Banner>You have unsaved changes</Banner>}
-
-
-            {/* ══════════════════════════════════════════════════════════════
-              * fs.submit / fs.reset / fs.syncAfterSave — lifecycle
-              * ══════════════════════════════════════════════════════════════ */}
-
-            {/* ── submit — validate → onSubmit ──────────────────────────────── */}
-            {/*
-              * 1. Validation run হয়
-              * 2. Error থাকলে সব field touched হয়, error দেখায়, false return করে
-              * 3. Valid হলে onSubmit callback call হয়
-              * 4. isSubmitting = true হয়, onSubmit resolve হলে false হয়
-              */}
-            <button
+              * loading  — true হলে spinner দেখায়, button disabled হয়
+              * disabled — isDirty=false হলে কিছু change হয়নি, save করার দরকার নেই
+              * ──────────────────────────────────────────────────────────────── */}
+            <s-button
+                slot="primary-action"
+                variant="primary"
+                loading={fs.isSubmitting}
                 disabled={!fs.isDirty || fs.isSubmitting}
                 onClick={fs.submit}
+                // fs.submit — validate করে, pass হলে onSubmit call করে
             >
                 {fs.isSubmitting ? "Saving…" : "Save"}
-            </button>
+            </s-button>
 
-            {/* ── reset — সব change discard করো ────────────────────────────── */}
-            {/*
-              * values → snapshot-এ revert
-              * pendingFiles, removedKeys, fieldErrors, touchedFields সব clear
-              * submitCount = 0, hasValidated = false
-              */}
-            <button
+            {/* ── secondary-actions slot ─────────────────────────────────────
+              * Discard — সব change বাদ দিয়ে snapshot-এ revert করো।
+              * isDirty = false হলে disable — কিছু change হয়নি।
+              * ──────────────────────────────────────────────────────────────── */}
+            <s-button
+                slot="secondary-actions"
+                variant="secondary"
                 disabled={!fs.isDirty}
                 onClick={fs.reset}
+                // fs.reset — values → savedSnapshot, সব error/touched clear
             >
-                Discard changes
-            </button>
+                Discard
+            </s-button>
 
-            {/* ── syncAfterSave — successful save-এর পর snapshot update ──────── */}
-            {/*
-              * Fresh server data দিয়ে snapshot update করো।
-              * তারপর form === snapshot, isDirty = false।
+
+            {/* ── Unsaved changes banner ─────────────────────────────────────
+              * fs.isDirty = true হলে user-কে জানাও যে unsaved change আছে।
+              * Page ছেড়ে যাওয়ার আগে save বা discard করতে বলো।
+              * tone="warning" — হলুদ রঙ, সতর্কতা বোঝায়
+              * ──────────────────────────────────────────────────────────────── */}
+            {fs.isDirty && (
+                <s-banner tone="warning" heading="Unsaved changes">
+                    You have unsaved changes. Save or discard before leaving.
+                </s-banner>
+            )}
+
+            {/* ── Submit error banner ────────────────────────────────────────
+              * submit attempt হয়েছে কিন্তু validation error আছে।
+              * submitCount > 0 — অন্তত একবার submit চেষ্টা হয়েছে।
+              * সব error একসাথে list করো যাতে user সব দেখতে পায়।
+              * tone="critical" — লাল রঙ, সমস্যা বোঝায়
+              * ──────────────────────────────────────────────────────────────── */}
+            {fs.submitCount > 0 && Object.keys(fs.fieldErrors).length > 0 && (
+                <s-banner tone="critical" heading="Please fix the errors below">
+                    {/* fs.fieldErrors — { "dot.path": "error message" } raw map */}
+                    {Object.entries(fs.fieldErrors).map(([path, msg]) => (
+                        <p key={path}>• {msg}</p>
+                    ))}
+                </s-banner>
+            )}
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * s-section — related fields group করো
               *
-              * Real usage:
-              * useEffect(() => {
-              *   if (fetcher.state === "idle" && fetcher.data?.product) {
-              *     fs.syncAfterSave(fetcher.data.product);
-              *   }
-              * }, [fetcher.state, fetcher.data]);
-              */}
-            <button onClick={() => fs.syncAfterSave(loaderData)}>
-                Simulate sync after save {/* demo purpose — normally fetcher.data দাও */}
-            </button>
+              * heading — section-এর title
+              * Children — যেকোনো Polaris Web Component রাখা যায়।
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Basic Information">
 
-        </div>
+                {/* ── fs.field.isDirty — per-field dirty indicator ──────────
+                  * title field snapshot থেকে আলাদা হলে banner দেখাও।
+                  * subtree check-ও করে: fs.field.isDirty("address") — address-এর
+                  * যেকোনো child বদলালে true।
+                  * ──────────────────────────────────────────────────────── */}
+                {fs.field.isDirty("title") && (
+                    <s-banner tone="info">Title has been changed</s-banner>
+                )}
+
+                {/* ── s-text-field — single line text input ──────────────────
+                  *
+                  * Props:
+                  *   label    — field label (required)
+                  *   value    — current value — fs.values থেকে নাও
+                  *   onChange — e.currentTarget.value দিয়ে fs.set() call করো
+                  *   onBlur   — fs.field.touch() call করো
+                  *              touch হলে error দেখানো শুরু হয়
+                  *   error    — fs.field.error() — touched হলে বা submit হলে দেখায়
+                  *              null হলে undefined দাও — empty string হলে empty error দেখায়
+                  *
+                  * ⚠️  Polaris Web Components-এ fs.field.bind() spread হয় না।
+                  *     Polaris React-এ {...fs.field.bind("title")} করা যেত।
+                  *     Web Components-এ prop names আলাদা, manually লিখতে হবে।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-text-field
+                    label="Title"
+                    value={fs.values.title}
+                    onChange={(e) => fs.set("title", e.currentTarget.value)}
+                    onBlur={() => fs.field.touch("title")}
+                    error={fs.field.error("title") ?? undefined}
+                />
+
+                {/* ── s-text-area — multiline text input ─────────────────────
+                  * Description-এর মতো long text-এর জন্য।
+                  * s-text-field-এর মতোই — শুধু component name আলাদা।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-text-area
+                    label="Description"
+                    value={fs.values.description}
+                    onChange={(e) => fs.set("description", e.currentTarget.value)}
+                    onBlur={() => fs.field.touch("description")}
+                    error={fs.field.error("description") ?? undefined}
+                />
+
+                {/* ── s-email-field — email input ─────────────────────────────
+                  * Built-in email format validation আছে browser level-এ।
+                  * Zod schema-তেও email validate হচ্ছে।
+                  *
+                  * onBlur-এ fs.validate.field("email") call করা হচ্ছে।
+                  * এতে blur হওয়ার সাথে সাথে single field validate হয়
+                  * এবং error immediately দেখায় — submit-এর জন্য অপেক্ষা করতে হয় না।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-email-field
+                    label="Email"
+                    value={fs.values.email}
+                    onChange={(e) => fs.set("email", e.currentTarget.value)}
+                    onBlur={() => {
+                        fs.field.touch("email");          // touched mark করো
+                        fs.validate.field("email");       // single field validate — error immediately
+                    }}
+                    error={fs.field.error("email") ?? undefined}
+                />
+
+                {/* ── s-text-field — phone ──────────────────────────────────
+                  * Phone-এর জন্য specific type নেই।
+                  * Zod schema-তে regex দিয়ে validate হচ্ছে।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-text-field
+                    label="Phone"
+                    value={fs.values.phone}
+                    onChange={(e) => fs.set("phone", e.currentTarget.value)}
+                    onBlur={() => fs.field.touch("phone")}
+                    error={fs.field.error("phone") ?? undefined}
+                />
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Pricing & Inventory
+              *
+              * price, stock — buildShape-এ num() দিয়ে string হয়েছে।
+              * s-money-field ও s-number-field string value নেয়।
+              * Zod schema-তে z.coerce.number() দিয়ে string → number convert হয়।
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Pricing & Inventory">
+
+                {/* ── s-money-field — monetary value input ───────────────────
+                  * Currency formatting built-in আছে।
+                  * value string হিসেবে দিতে হয় (num() দিয়ে normalize হয়েছে)।
+                  * onChange-এ string আসে — Zod schema coerce করে validate করবে।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-money-field
+                    label="Price"
+                    value={fs.values.price}
+                    onChange={(e) => fs.set("price", e.currentTarget.value)}
+                    onBlur={() => fs.field.touch("price")}
+                    error={fs.field.error("price") ?? undefined}
+                />
+
+                {/* ── s-number-field — numeric input ─────────────────────────
+                  * Number validation built-in আছে (non-numeric type করতে দেয় না)।
+                  * value string হিসেবে দিতে হয়।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-number-field
+                    label="Stock"
+                    value={fs.values.stock}
+                    onChange={(e) => fs.set("stock", e.currentTarget.value)}
+                    onBlur={() => fs.field.touch("stock")}
+                    error={fs.field.error("stock") ?? undefined}
+                />
+
+                {/* ── fs.field.increment / fs.field.decrement — numeric shortcut
+                  *
+                  * fs.set("stock", Number(fs.values.stock) + 1) এর shortcut।
+                  * step parameter দিয়ে custom step দেওয়া যায়।
+                  *
+                  * ⚠️  stock string হিসেবে store আছে।
+                  *     hook ভেতরে Number() convert করে add করে।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button-group>
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.field.decrement("stock")}        // stock - 1
+                        disabled={Number(fs.values.stock) <= 0}            // 0 এর নিচে যাবে না
+                    >
+                        − 1
+                    </s-button>
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.field.decrement("stock", 10)}    // stock - 10
+                        disabled={Number(fs.values.stock) < 10}
+                    >
+                        − 10
+                    </s-button>
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.field.increment("stock")}        // stock + 1
+                    >
+                        + 1
+                    </s-button>
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.field.increment("stock", 10)}    // stock + 10
+                    >
+                        + 10
+                    </s-button>
+                </s-button-group>
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Status — boolean fields
+              *
+              * s-checkbox — checked/unchecked toggle।
+              * fs.field.toggle — button দিয়ে boolean flip করার shortcut।
+              * fs.field.watch — isActive false হলে isFeatured auto-reset।
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Status">
+
+                {/* ── s-checkbox — boolean field ─────────────────────────────
+                  *
+                  * Props:
+                  *   checked  — boolean value (fs.values.isActive)
+                  *              string দিলে কাজ করবে না — bool() দিয়ে normalize জরুরি
+                  *   onChange — e.currentTarget.checked → boolean
+                  *   details  — checkbox-এর নিচে helper text দেখায়
+                  *   disabled — true হলে click করা যাবে না
+                  * ──────────────────────────────────────────────────────── */}
+                <s-checkbox
+                    label="Active"
+                    checked={fs.values.isActive}
+                    onChange={(e) => fs.set("isActive", e.currentTarget.checked)}
+                    details="Active products are visible in the store"
+                    // details prop — checkbox-এর নিচে ছোট help text দেখায়
+                />
+
+                <s-checkbox
+                    label="Featured"
+                    checked={fs.values.isFeatured}
+                    onChange={(e) => fs.set("isFeatured", e.currentTarget.checked)}
+                    disabled={!fs.values.isActive}
+                    // isActive false হলে disabled — fs.field.watch() auto-reset করে
+                    details={!fs.values.isActive ? "Activate product first" : "Show in featured section"}
+                    // details — condition-এ আলাদা message দেখাও
+                />
+
+                {/* ── fs.field.toggle — boolean flip shortcut ────────────────
+                  * fs.set("isActive", !fs.values.isActive) এর shortcut।
+                  * Checkbox-এর alternative pattern — button দিয়ে toggle।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button
+                    variant="secondary"
+                    onClick={() => fs.field.toggle("isActive")}
+                    // isActive: true → false, false → true
+                >
+                    {fs.values.isActive ? "Deactivate" : "Activate"}
+                </s-button>
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Address — nested object field
+              *
+              * fs.set("address.city", value) — dot-path দিয়ে nested field update।
+              * fs.merge({ city, zip }, "address") — একসাথে multiple field update।
+              * fs.field.isDirty("address") — subtree dirty check।
+              * fs.snapshot.get("address") — saved snapshot থেকে restore।
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Address">
+
+                {/* ── Nested field — dot-path দিয়ে ───────────────────────────
+                  * "address.city" — address object-এর city property।
+                  * fs.set("address.city", value) → address.city update হয়,
+                  * address.zip ও address.country unchanged থাকে।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-text-field
+                    label="City"
+                    value={fs.values.address.city}
+                    onChange={(e) => fs.set("address.city", e.currentTarget.value)}
+                    onBlur={() => fs.field.touch("address.city")}
+                    error={fs.field.error("address.city") ?? undefined}
+                />
+
+                <s-text-field
+                    label="ZIP"
+                    value={fs.values.address.zip}
+                    onChange={(e) => fs.set("address.zip", e.currentTarget.value)}
+                    onBlur={() => fs.field.touch("address.zip")}
+                    error={fs.field.error("address.zip") ?? undefined}
+                />
+
+                {/* ── fs.merge — address-এর multiple fields একসাথে update ──
+                  * fs.set() আলাদা করলে দুটো render হয়।
+                  * fs.merge() একটা render-এ করে।
+                  * "address" path-এ { city, zip } shallow-merge হয়।
+                  * address.country unchanged থাকে।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button
+                    variant="secondary"
+                    onClick={() => fs.merge({ city: "Chittagong", zip: "4000" }, "address")}
+                    // address.city → "Chittagong", address.zip → "4000"
+                    // address.country → "BD" (unchanged)
+                >
+                    Set Chittagong address
+                </s-button>
+
+                {/* ── fs.field.isDirty + fs.snapshot.get — per-field revert ──
+                  * address subtree-এর যেকোনো child বদলালে isDirty = true।
+                  * snapshot থেকে পুরো address restore করো।
+                  * ──────────────────────────────────────────────────────── */}
+                {fs.field.isDirty("address") && (
+                    <s-button
+                        variant="tertiary"
+                        onClick={() => fs.set("address", fs.snapshot.get("address"))}
+                        // snapshot-এর { city: "Dhaka", zip: "1000", country: "BD" }-এ ফিরে যাবে
+                    >
+                        Revert address
+                    </s-button>
+                )}
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * SEO — nested object + fs.setMany batch update
+              *
+              * seo.title — fs.field.compute দিয়ে title থেকে auto-generate হয়।
+              *             User manually edit করলে compute override হয় না।
+              *             (compute শুধু title বদলালে run হয়)
+              *
+              * fs.setMany — title + seo.title + seo.description একটা render-এ।
+              *              আলাদা fs.set() করলে তিনটা re-render হতো।
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="SEO">
+
+                {/* seo.title — fs.field.compute দিয়ে title থেকে auto-generate হয়।
+                  * User এটা manually edit করতে পারবে — override হবে না।
+                  * title field watch করে — title বদলালে এটা update হয়। */}
+                <s-text-field
+                    label="SEO Title"
+                    value={fs.values.seo.title}
+                    onChange={(e) => fs.set("seo.title", e.currentTarget.value)}
+                    onBlur={() => fs.field.touch("seo.title")}
+                    error={fs.field.error("seo.title") ?? undefined}
+                />
+
+                <s-text-area
+                    label="SEO Description"
+                    value={fs.values.seo.description}
+                    onChange={(e) => fs.set("seo.description", e.currentTarget.value)}
+                    onBlur={() => fs.field.touch("seo.description")}
+                    error={fs.field.error("seo.description") ?? undefined}
+                />
+
+                {/* ── fs.setMany — batch update একটা render-এ ──────────────
+                  * তিনটা field আলাদা fs.set() করলে তিনটা re-render হতো।
+                  * setMany একটা functional update-এ সব apply করে — একটা render।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button
+                    variant="secondary"
+                    onClick={() => fs.setMany([
+                        ["title",           "Premium Leather Bag"],
+                        ["seo.title",       "Premium Leather Bag — My Store"],
+                        ["seo.description", "Buy premium leather bags."],
+                        // তিনটা field একটা render-এ update হবে
+                    ])}
+                >
+                    Apply preset SEO
+                </s-button>
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Social Links — fs.object দিয়ে dynamic key management
+              *
+              * socialLinks = { facebook: "...", instagram: "..." }
+              * কতটা key থাকবে আগে জানা নেই — runtime-এ add/delete হয়।
+              *
+              * fs.object.setKey(parentPath, key, value) — key add বা update
+              * fs.object.deleteKey(parentPath, key)     — key remove
+              *
+              * Object.entries() দিয়ে render করো — key list dynamic।
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Social Links">
+
+                {/* Dynamic keys — Object.entries দিয়ে render ─────────────────
+                  * প্রতিটা [platform, url] pair render হয়।
+                  * platform = "facebook", url = "https://facebook.com/mystore"
+                  * ──────────────────────────────────────────────────────── */}
+                {Object.entries(fs.values.socialLinks).map(([platform, url]) => (
+                    <div key={platform} style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
+
+                        {/* ── s-url-field — URL validation built-in ─────────
+                          * label — platform নাম capitalize করে দেখাও
+                          * onChange — fs.object.setKey() দিয়ে value update
+                          *            platform key-টা unchanged থাকে
+                          * ──────────────────────────────────────────────── */}
+                        <s-url-field
+                            label={platform.charAt(0).toUpperCase() + platform.slice(1)}
+                            value={url}
+                            onChange={(e) => fs.object.setKey("socialLinks", platform, e.currentTarget.value)}
+                            // socialLinks.facebook = "new url"
+                            onBlur={() => fs.field.touch(`socialLinks.${platform}`)}
+                            error={fs.field.error(`socialLinks.${platform}`) ?? undefined}
+                        />
+
+                        {/* ── fs.object.deleteKey — key remove ──────────────
+                          * socialLinks থেকে এই platform key বাদ দাও।
+                          * Object.entries re-render-এ এটা আর দেখাবে না।
+                          * ──────────────────────────────────────────────── */}
+                        <s-button
+                            variant="tertiary"
+                            tone="critical"
+                            onClick={() => fs.object.deleteKey("socialLinks", platform)}
+                        >
+                            Remove
+                        </s-button>
+                    </div>
+                ))}
+
+                {/* ── নতুন platform key add করো ─────────────────────────────
+                  * fs.object.setKey() — key exist না করলে add হয়,
+                  *                      exist করলে value update হয়।
+                  * "" দিয়ে empty value add করো — user পরে URL type করবে।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button-group>
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.object.setKey("socialLinks", "tiktok", "")}
+                        // socialLinks.tiktok = "" — নতুন key add হবে
+                    >
+                        + TikTok
+                    </s-button>
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.object.setKey("socialLinks", "twitter", "")}
+                    >
+                        + Twitter/X
+                    </s-button>
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.object.setKey("socialLinks", "youtube", "")}
+                    >
+                        + YouTube
+                    </s-button>
+                </s-button-group>
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Tags — fs.list দিয়ে simple array manage
+              *
+              * fs.list.bindItem(path, index) — row-এর সব helper একসাথে পাও:
+              *   item.value    — এই index-এর current data { id, name, color }
+              *   item.index    — array-তে position
+              *   item.isFirst  — প্রথম item কিনা (moveUp disable করতে)
+              *   item.isLast   — শেষ item কিনা (moveDown disable করতে)
+              *   item.isDirty  — এই row snapshot থেকে আলাদা হয়েছে কিনা
+              *   item.setField — এই item-এর একটা field update
+              *   item.remove   — এই item বাদ দাও (array shrink হয়)
+              *   item.duplicate— clone করে ঠিক পরে insert
+              *   item.moveUp   — একটা position উপরে
+              *   item.moveDown — একটা position নিচে
+              *   item.replace  — পুরো item replace
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Tags">
+
+                {fs.values.tags.map((tag, i) => {
+                    // bindItem — এই row-এর সব helper একসাথে পাও
+                    const item = fs.list.bindItem("tags", i);
+                    return (
+                        <div key={tag.id} style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
+
+                            {/* ── item.setField — এই item-এর একটা field update ──
+                              * fs.list.setField("tags", i, "name", value) এর shortcut।
+                              * শুধু এই item-এর name update হয় — বাকি items unchanged।
+                              * ──────────────────────────────────────────────── */}
+                            <s-text-field
+                                label="Tag name"
+                                value={item.value.name}
+                                onChange={(e) => item.setField("name", e.target.value)}
+                            />
+
+                            <s-text-field
+                                label="Color"
+                                value={item.value.color}
+                                onChange={(e) => item.setField("color", e.target.value)}
+                            />
+
+                            {/* ── item.isDirty — এই row change হয়েছে কিনা ────
+                              * Snapshot-এর এই index-এর item-এর সাথে compare।
+                              * Changed indicator দেখাও।
+                              * ──────────────────────────────────────────────── */}
+                            {item.isDirty && (
+                                <s-badge tone="warning">Changed</s-badge>
+                            )}
+
+                            {/* ── moveUp / moveDown — reorder ───────────────────
+                              * item.isFirst = true হলে moveUp disable।
+                              * item.isLast  = true হলে moveDown disable।
+                              * ──────────────────────────────────────────────── */}
+                            <s-button
+                                variant="tertiary"
+                                onClick={item.moveUp}
+                                disabled={item.isFirst}   // প্রথম item উপরে যেতে পারবে না
+                                icon="arrow-up"
+                            />
+                            <s-button
+                                variant="tertiary"
+                                onClick={item.moveDown}
+                                disabled={item.isLast}    // শেষ item নিচে যেতে পারবে না
+                                icon="arrow-down"
+                            />
+
+                            {/* ── item.duplicate — clone করে পরে insert ────────
+                              * এই item-এর deep clone তৈরি করে ঠিক পরে insert।
+                              * Original unchanged থাকে।
+                              * ──────────────────────────────────────────────── */}
+                            <s-button variant="tertiary" onClick={item.duplicate}>
+                                Copy
+                            </s-button>
+
+                            {/* ── item.remove — array থেকে বাদ দাও ────────────
+                              * index-এ splice হয়, array length কমে।
+                              * বাকি items-এর index shift হয়।
+                              * ──────────────────────────────────────────────── */}
+                            <s-button
+                                variant="tertiary"
+                                tone="critical"
+                                onClick={item.remove}
+                                icon="delete"
+                            />
+                        </div>
+                    );
+                })}
+
+                <s-button-group>
+                    {/* ── fs.list.append — শেষে add ─────────────────────────
+                      * Object item deep-clone হয় — template mutate হয় না।
+                      * id: Date.now() — temp unique id (server save-এ real id আসবে)
+                      * ──────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.list.append("tags", { id: Date.now(), name: "", color: "blue" })}
+                    >
+                        Add tag
+                    </s-button>
+
+                    {/* ── fs.list.filter — condition match করা গুলো রাখো ────
+                      * name="" tags বাদ দাও।
+                      * tag => tag.name !== "" — predicate function
+                      * Match করে না এমন গুলো remove হয়।
+                      * ──────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="tertiary"
+                        onClick={() => fs.list.filter("tags", tag => tag.name !== "")}
+                    >
+                        Remove empty tags
+                    </s-button>
+
+                    {/* ── fs.list.clear — পুরো array [] করে দাও ────────────── */}
+                    <s-button
+                        variant="tertiary"
+                        tone="critical"
+                        onClick={() => fs.list.clear("tags")}
+                    >
+                        Clear all tags
+                    </s-button>
+                </s-button-group>
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Variants — array sort, filter, updateWhere, find, findIndex
+              *
+              * fs.list.sort(path, field, direction) — field দিয়ে sort
+              * fs.list.filter(path, predicate)      — condition-এ filter
+              * fs.list.updateWhere(path, pred, patch) — bulk update
+              * fs.list.find(path, predicate)        — item খোঁজো
+              * fs.list.findIndex(path, predicate)   — index খোঁজো
+              * fs.list.swap(path, i, j)             — দুটো item swap
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Variants">
+
+                <s-button-group>
+                    {/* ── fs.list.sort — field দিয়ে sort ──────────────────────
+                      * "asc"  — ascending (ছোট থেকে বড়)
+                      * "desc" — descending (বড় থেকে ছোট)
+                      * ──────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.list.sort("variants", "price", "asc")}
+                        // Small(1000), Medium(1200), Large(1500)
+                    >
+                        Sort by price ↑
+                    </s-button>
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.list.sort("variants", "price", "desc")}
+                        // Large(1500), Medium(1200), Small(1000)
+                    >
+                        Sort by price ↓
+                    </s-button>
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.list.sort("variants", "name", "asc")}
+                        // Large, Medium, Small (alphabetical)
+                    >
+                        Sort by name A→Z
+                    </s-button>
+
+                    {/* ── fs.list.swap — দুটো item position exchange ──────────
+                      * variants[0] ↔ variants[1]
+                      * ──────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="secondary"
+                        onClick={() => fs.list.swap("variants", 0, 1)}
+                        // Small ↔ Medium
+                    >
+                        Swap first two
+                    </s-button>
+
+                    {/* ── fs.list.filter — condition-এ filter ─────────────────
+                      * stock <= 0 variants বাদ দাও।
+                      * predicate false return করলে সেই item বাদ যায়।
+                      * ──────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="tertiary"
+                        tone="critical"
+                        onClick={() => fs.list.filter("variants", v => Number(v.stock) > 0)}
+                        // stock = 0 variants array থেকে বাদ যাবে
+                    >
+                        Remove out-of-stock
+                    </s-button>
+
+                    {/* ── fs.list.updateWhere — condition-এ bulk update ────────
+                      * out-of-stock variants-এর name suffix add করো।
+                      * predicate match করা সব item-এ patch apply হয়।
+                      * ──────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="tertiary"
+                        onClick={() => fs.list.updateWhere(
+                            "variants",
+                            v => Number(v.stock) === 0,        // condition
+                            { name: "Out of Stock" }           // এই patch apply হবে
+                        )}
+                    >
+                        Mark out-of-stock
+                    </s-button>
+
+                    {/* ── fs.list.find + fs.list.findIndex ────────────────────
+                      * id দিয়ে item খোঁজো — index manually track করতে হয় না।
+                      * ──────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="tertiary"
+                        onClick={() => {
+                            // id দিয়ে index খোঁজো
+                            const idx = fs.list.findIndex("variants", v => v.id === "v2");
+                            // → 1 (Medium variant-এর index)
+                            if (idx !== -1) {
+                                fs.list.remove("variants", idx);
+                                // Medium variant বাদ যাবে
+                            }
+                        }}
+                    >
+                        Remove Medium by id
+                    </s-button>
+
+                    <s-button
+                        variant="tertiary"
+                        onClick={() => {
+                            // item object return করে — index না
+                            const medium = fs.list.find("variants", v => v.name === "Medium");
+                            console.log("Medium:", medium);
+                            // → { id: "v2", name: "Medium", price: 1200, ... }
+                        }}
+                    >
+                        Find Medium (log)
+                    </s-button>
+                </s-button-group>
+
+                {/* Variants list — bindItem দিয়ে row manage */}
+                {fs.values.variants.map((variant, i) => {
+                    const item = fs.list.bindItem("variants", i);
+                    return (
+                        <div key={variant.id} style={{ border: "1px solid #ccc", padding: "12px", marginBottom: "8px" }}>
+
+                            {/* item.value.name — এই variant-এর current name */}
+                            <s-text-field
+                                label="Name"
+                                value={item.value.name}
+                                onChange={(e) => item.setField("name", e.target.value)}
+                            />
+
+                            {/* cross-field validation error — variants.i.price */}
+                            <s-money-field
+                                label="Price"
+                                value={item.value.price}
+                                onChange={(e) => item.setField("price", e.currentTarget.value)}
+                                error={fs.field.error(`variants.${i}.price`) ?? undefined}
+                                // validate function-এ: variants.0.price, variants.1.price
+                            />
+
+                            <s-number-field
+                                label="Stock"
+                                value={item.value.stock}
+                                onChange={(e) => item.setField("stock", e.currentTarget.value)}
+                            />
+
+                            {/* এই specific variant dirty হলে indicator */}
+                            {item.isDirty && <s-badge tone="warning">Modified</s-badge>}
+
+                            <s-button-group>
+                                <s-button variant="tertiary" onClick={item.moveUp}   disabled={item.isFirst}>↑</s-button>
+                                <s-button variant="tertiary" onClick={item.moveDown} disabled={item.isLast}>↓</s-button>
+                                {/* duplicate — clone করে পরে insert */}
+                                <s-button variant="tertiary" onClick={item.duplicate}>Duplicate</s-button>
+                                <s-button variant="tertiary" tone="critical" onClick={item.remove}>Remove</s-button>
+                            </s-button-group>
+                        </div>
+                    );
+                })}
+
+                {/* ── fs.list.append — শেষে নতুন variant add ─────────────────
+                  * sortOrder: variants.length — শেষে position assign করো
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button
+                    variant="secondary"
+                    onClick={() => fs.list.append("variants", {
+                        id: Date.now(),
+                        name: "",
+                        price: 0,
+                        stock: 0,
+                        sortOrder: fs.values.variants.length,
+                    })}
+                >
+                    Add variant
+                </s-button>
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Sections — nested array (section → blocks)
+              *
+              * দুই level deep array:
+              *   sections[0].blocks[0] → path: "sections.0.blocks.0"
+              *
+              * Path dynamically build করো:
+              *   section level: fs.list.bindItem("sections", si)
+              *   block level:   fs.list.bindItem(`sections.${si}.blocks`, bi)
+              *
+              * যতটা deep হোক, dot-path pattern একই।
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Content Sections">
+
+                {fs.values.sections.map((section, si) => {
+                    // si = section index (0, 1, 2...)
+                    const sectionItem = fs.list.bindItem("sections", si);
+                    return (
+                        <div key={section.id} style={{ border: "1px solid #e0e0e0", padding: "16px", marginBottom: "12px" }}>
+
+                            {/* Section heading — sectionItem.setField দিয়ে update */}
+                            <s-text-field
+                                label="Section heading"
+                                value={sectionItem.value.heading}
+                                onChange={(e) => sectionItem.setField("heading", e.target.value)}
+                                // fs.list.setField("sections", si, "heading", value) এর shortcut
+                            />
+
+                            <s-button-group>
+                                <s-button variant="tertiary" onClick={sectionItem.moveUp}   disabled={sectionItem.isFirst}>↑</s-button>
+                                <s-button variant="tertiary" onClick={sectionItem.moveDown} disabled={sectionItem.isLast}>↓</s-button>
+                                {/* সম্পূর্ণ section deep-clone করে পরে insert */}
+                                <s-button variant="tertiary" onClick={sectionItem.duplicate}>Duplicate section</s-button>
+                                <s-button variant="tertiary" tone="critical" onClick={sectionItem.remove}>Remove section</s-button>
+                            </s-button-group>
+
+                            {/* ── Nested blocks ─────────────────────────────────
+                              * Path: `sections.${si}.blocks`
+                              * si = 0 হলে: "sections.0.blocks"
+                              * si = 1 হলে: "sections.1.blocks"
+                              *
+                              * bindItem-ও dynamic path নেয়:
+                              * fs.list.bindItem(`sections.${si}.blocks`, bi)
+                              * ──────────────────────────────────────────────── */}
+                            {section.blocks.map((block, bi) => {
+                                // bi = block index এই section-এর ভেতরে
+                                // Path: "sections.0.blocks.0", "sections.0.blocks.1"...
+                                const blockItem = fs.list.bindItem(`sections.${si}.blocks`, bi);
+                                return (
+                                    <div key={block.id} style={{ marginLeft: "16px", marginTop: "8px" }}>
+                                        <s-text-area
+                                            label={`Block ${bi + 1} content`}
+                                            value={blockItem.value.content ?? ""}
+                                            onChange={(e) => blockItem.setField("content", e.target.value)}
+                                        />
+                                        {/* block remove — এই section-এর blocks array থেকে */}
+                                        <s-button
+                                            variant="tertiary"
+                                            tone="critical"
+                                            onClick={blockItem.remove}
+                                        >
+                                            Remove block
+                                        </s-button>
+                                    </div>
+                                );
+                            })}
+
+                            {/* ── fs.list.append nested — এই section-এ block add ──
+                              * Path dynamically build: `sections.${si}.blocks`
+                              * ──────────────────────────────────────────────── */}
+                            <s-button
+                                variant="tertiary"
+                                onClick={() => fs.list.append(
+                                    `sections.${si}.blocks`,
+                                    { id: Date.now(), type: "text", content: "" }
+                                    // এই নির্দিষ্ট section-এর blocks-এ append
+                                )}
+                            >
+                                + Add block
+                            </s-button>
+
+                        </div>
+                    );
+                })}
+
+                {/* নতুন section append — empty blocks array সহ */}
+                <s-button
+                    variant="secondary"
+                    onClick={() => fs.list.append("sections", {
+                        id: Date.now(),
+                        heading: "New Section",
+                        sortOrder: fs.values.sections.length,
+                        blocks: [],   // empty blocks array — পরে add করা যাবে
+                    })}
+                >
+                    Add section
+                </s-button>
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * FAQ — reorder + normalizeOrder pattern
+              *
+              * fs.list.reorder(path, from, to) — item সরায় (move-এর alias)
+              * fs.list.normalizeOrder(path, field) — sortOrder re-stamp করে
+              *
+              * Drag-drop pattern:
+              *   1. reorder() — visual order change করো
+              *   2. normalizeOrder() — sortOrder: 0,1,2... re-assign করো
+              *   3. Submit-এ server sortOrder দেখে DB-তে order save করে
+              *
+              * fs.list.prepend — শুরুতে add (append-এর বিপরীত)
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="FAQ">
+
+                {fs.values.faqItems.map((faq, i) => {
+                    const item = fs.list.bindItem("faqItems", i);
+                    return (
+                        <div key={faq.id} style={{ border: "1px solid #e0e0e0", padding: "12px", marginBottom: "8px" }}>
+
+                            <s-text-field
+                                label="Question"
+                                value={item.value.question}
+                                onChange={(e) => item.setField("question", e.target.value)}
+                            />
+
+                            {/* faqItems.i.answer — validate function-এ validate হচ্ছে */}
+                            <s-text-area
+                                label="Answer"
+                                value={item.value.answer}
+                                onChange={(e) => item.setField("answer", e.target.value)}
+                                error={fs.field.error(`faqItems.${i}.answer`) ?? undefined}
+                            />
+
+                            <s-button-group>
+                                {/* ── reorder + normalizeOrder — drag-drop pattern ──
+                                  * reorder() — i থেকে i-1 position-এ move করো
+                                  * normalizeOrder() — sortOrder: 0,1,2... re-stamp
+                                  * DB-তে sortOrder দিয়ে order save হবে
+                                  * ──────────────────────────────────────────────── */}
+                                <s-button
+                                    variant="tertiary"
+                                    onClick={() => {
+                                        fs.list.reorder("faqItems", i, i - 1);
+                                        // faqItems[i] → faqItems[i-1] position
+                                        fs.list.normalizeOrder("faqItems", "sortOrder");
+                                        // sortOrder: 0,1,2... re-assign
+                                    }}
+                                    disabled={item.isFirst}
+                                >
+                                    ↑ Move up
+                                </s-button>
+                                <s-button
+                                    variant="tertiary"
+                                    onClick={() => {
+                                        fs.list.reorder("faqItems", i, i + 1);
+                                        fs.list.normalizeOrder("faqItems", "sortOrder");
+                                    }}
+                                    disabled={item.isLast}
+                                >
+                                    Move down ↓
+                                </s-button>
+                                <s-button variant="tertiary" tone="critical" onClick={item.remove}>
+                                    Remove
+                                </s-button>
+                            </s-button-group>
+
+                        </div>
+                    );
+                })}
+
+                {/* ── fs.list.prepend — শুরুতে add ───────────────────────────
+                  * append() — শেষে add।
+                  * prepend() — শুরুতে add — faqItems[0] হয়ে যাবে।
+                  * normalizeOrder() call করো sortOrder fix করতে।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button
+                    variant="secondary"
+                    onClick={() => {
+                        fs.list.prepend("faqItems", {
+                            id: Date.now(),
+                            question: "",
+                            answer: "",
+                            sortOrder: 0,
+                        });
+                        fs.list.normalizeOrder("faqItems", "sortOrder");
+                        // নতুন item sortOrder=0, বাকি গুলো 1,2,3...
+                    }}
+                >
+                    Add FAQ at top
+                </s-button>
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Media — fs.media দিয়ে file upload + single URL null করা
+              *
+              * fs.media তিনটা কাজ করে:
+              *   A) Single file upload — avatar, cover (একটাই থাকবে)
+              *   B) Multiple file upload — gallery (একাধিক)
+              *   C) Existing single URL string field null করা
+              *
+              * কেন values-এ File রাখা যায় না?
+              *   File object serialize হয় না — JSON.stringify করলে হারিয়ে যায়।
+              *   তাই pendingFiles-এ আলাদা রাখা হয়।
+              *   onSubmit-এ pendingFiles থেকে FormData-তে append করো।
+              *
+              * ⚠️  Image array manage করতে fs.list use করো — fs.media না।
+              *     fs.media শুধু single URL string field-এর জন্য।
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Media">
+
+                {/* ── A) Single file upload — avatar ───────────────────────────
+                  *
+                  * s-drop-zone properties (doc থেকে):
+                  *   label              — field label (required)
+                  *   accept             — comma-separated MIME types বা file extensions
+                  *                        "image/jpeg,image/png" বা ".jpg,.png"
+                  *   multiple           — false = single file, true = multiple files
+                  *   accessibilityLabel — screen reader-এর জন্য descriptive label
+                  *   error              — validation error message
+                  *
+                  * s-drop-zone events:
+                  *   onChange     — file select বা drop হলে fire হয়
+                  *                  e.currentTarget.files = FileList (array-like)
+                  *                  Array.from() দিয়ে File[] convert করো
+                  *   onDropRejected — accept-এ নেই এমন file drop করলে fire হয়
+                  *
+                  * fs.media.setterFor("avatar") — pendingFiles["avatar"] = files set করে
+                  * fs.media.hasFile("avatar")   — staged file আছে কিনা
+                  * fs.media.getFiles("avatar")  — File[] পাও
+                  * fs.media.clearFiles("avatar")— staged files discard
+                  * ──────────────────────────────────────────────────────── */}
+                <s-drop-zone
+                    label="Avatar"
+                    accept="image/jpeg,image/png,image/webp"
+                    multiple={false}
+                    // multiple={false} — একটার বেশি select বা drop করতে দেবে না
+                    accessibilityLabel="Upload avatar image — JPG, PNG, or WebP only"
+                    error={fs.field.error("avatar") ?? undefined}
+                    onChange={(e) => {
+                        // e.currentTarget.files = FileList — Array-like object
+                        // Array.from() দিয়ে File[] convert করো
+                        const files = Array.from(e.currentTarget.files ?? []);
+                        if (files.length > 0) {
+                            // setterFor("avatar") return করে একটা function
+                            // সেই function-এ File[] দিলে pendingFiles["avatar"] = files হয়
+                            fs.media.setterFor("avatar")(files);
+                        }
+                    }}
+                    onDropRejected={() => {
+                        // accept-এ নেই এমন file drag করলে এটা fire হয়
+                        // manually error set করো
+                        fs.field.setError("avatar", "Only JPG, PNG, WebP allowed");
+                    }}
+                />
+
+                {/* ── Single file preview ────────────────────────────────────
+                  * File select হলে local preview দেখাও।
+                  * URL.createObjectURL(file) — browser-এ local temp URL বানায়।
+                  *
+                  * ⚠️  Real app-এ useMemo বা useEffect-এ URL বানাও।
+                  *     প্রতি render-এ নতুন object URL create হলে memory leak হতে পারে।
+                  * ──────────────────────────────────────────────────────── */}
+                {fs.media.hasFile("avatar") && (() => {
+                    // fs.media.getFiles("avatar")[0] — প্রথম (একমাত্র) staged File
+                    const file = fs.media.getFiles("avatar")[0];
+                    return (
+                        <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "8px" }}>
+                            <img
+                                src={URL.createObjectURL(file)}
+                                alt={file.name}
+                                width={60}
+                                height={60}
+                                style={{ objectFit: "cover", borderRadius: "4px" }}
+                            />
+                            <div>
+                                <p>{file.name}</p>
+                                <p>{(file.size / 1024).toFixed(1)} KB</p>
+                            </div>
+                            {/* fs.media.clearFiles — staged file বাদ দাও */}
+                            <s-button
+                                variant="tertiary"
+                                tone="critical"
+                                onClick={() => fs.media.clearFiles("avatar")}
+                                // pendingFiles["avatar"] = []
+                            >
+                                Remove
+                            </s-button>
+                        </div>
+                    );
+                })()}
+
+
+                {/* ── C) Existing avatarUrl null করা ───────────────────────────
+                  *
+                  * avatarUrl = "https://cdn.example.com/avatar.jpg" — server-এ আছে।
+                  * User remove করতে চাইলে শুধু fs.set("avatarUrl", "") করলে হবে না।
+                  *
+                  * কেন fs.media.removeExisting() দরকার?
+                  *   fs.set("avatarUrl", "") — form-এ URL clear হয়।
+                  *   কিন্তু server জানে না: user ইচ্ছাকৃত remove করেছে
+                  *   নাকি form submit-এ field empty ছিল।
+                  *   removeExisting() দুটো কাজ করে:
+                  *     1. form-এ avatarUrl = "" (preview hide হয়)
+                  *     2. removedKeys["avatarUrl"] = true (server flag)
+                  *   onSubmit-এ server removedKeys দেখে DB-তে null করে।
+                  *
+                  * fs.media.hasRemoved("avatarUrl") — remove করা হয়েছে কিনা
+                  * fs.media.undoRemove("avatarUrl") — snapshot থেকে restore, flag clear
+                  * ──────────────────────────────────────────────────────── */}
+                {/* avatarUrl আছে এবং remove করা হয়নি — preview দেখাও */}
+                {fs.values.avatarUrl && !fs.media.hasRemoved("avatarUrl") && (
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "8px" }}>
+                        {/* server থেকে আসা existing image preview */}
+                        <img
+                            src={fs.values.avatarUrl}
+                            alt="Current avatar"
+                            width={60}
+                            height={60}
+                            style={{ objectFit: "cover", borderRadius: "4px" }}
+                        />
+                        <s-button
+                            variant="tertiary"
+                            tone="critical"
+                            onClick={() => fs.media.removeExisting("avatarUrl")}
+                            // avatarUrl = "", removedKeys["avatarUrl"] = true
+                        >
+                            Remove current avatar
+                        </s-button>
+                    </div>
+                )}
+
+                {/* Remove করা হলে undo option দেখাও */}
+                {fs.media.hasRemoved("avatarUrl") && (
+                    // tone="warning" — সতর্কতা: save করলে DB-তে null হবে
+                    <s-banner tone="warning" heading="Avatar will be removed on save">
+                        <s-button
+                            slot="secondary-actions"
+                            variant="secondary"
+                            onClick={() => fs.media.undoRemove("avatarUrl")}
+                            // avatarUrl snapshot থেকে restore হবে, removedKeys flag clear হবে
+                        >
+                            Undo
+                        </s-button>
+                    </s-banner>
+                )}
+
+
+                {/* ── B) Multiple file upload — gallery ────────────────────────
+                  *
+                  * multiple={true} — একাধিক file একসাথে select বা drop করা যাবে।
+                  *
+                  * নতুন files existing staged files-এর সাথে merge করো:
+                  *   const existing = fs.media.getFiles("gallery");
+                  *   fs.media.setterFor("gallery")([...existing, ...newFiles]);
+                  *
+                  * Replace করলে: fs.media.setterFor("gallery")(newFiles) — আগেরগুলো হারাবে।
+                  * Merge করলে: [...existing, ...newFiles] — সব রাখো।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-drop-zone
+                    label="Gallery Images"
+                    accept="image/jpeg,image/png,image/webp"
+                    multiple={true}
+                    // multiple={true} — একাধিক file select বা drop করা যাবে
+                    accessibilityLabel="Upload gallery images — drag and drop multiple files or click to browse"
+                    onChange={(e) => {
+                        const newFiles = Array.from(e.currentTarget.files ?? []);
+                        if (newFiles.length > 0) {
+                            // আগের staged files রাখো, নতুন files merge করো
+                            const existing = fs.media.getFiles("gallery");
+                            fs.media.setterFor("gallery")([...existing, ...newFiles]);
+                            // pendingFiles["gallery"] = [...existing, ...newFiles]
+                        }
+                    }}
+                />
+
+                {/* Selected gallery files list — প্রতিটা আলাদাভাবে remove করা যাবে */}
+                {fs.media.hasFile("gallery") && (
+                    <div style={{ marginTop: "8px" }}>
+                        {/* কতটা file staged আছে */}
+                        <p>{fs.media.getFiles("gallery").length} image(s) selected</p>
+
+                        {fs.media.getFiles("gallery").map((file, i) => (
+                            <div key={`${file.name}-${i}`} style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "4px" }}>
+                                {/* Local preview */}
+                                <img
+                                    src={URL.createObjectURL(file)}
+                                    alt={file.name}
+                                    width={40}
+                                    height={40}
+                                    style={{ objectFit: "cover", borderRadius: "4px" }}
+                                />
+                                <span>{file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
+
+                                {/* এই specific file বাদ দাও — বাকি গুলো রাখো */}
+                                <s-button
+                                    variant="tertiary"
+                                    tone="critical"
+                                    onClick={() => {
+                                        const currentFiles = fs.media.getFiles("gallery");
+                                        // i-তম file বাদ দিয়ে বাকি সব রাখো
+                                        fs.media.setterFor("gallery")(
+                                            currentFiles.filter((_, idx) => idx !== i)
+                                        );
+                                    }}
+                                >
+                                    ✕
+                                </s-button>
+                            </div>
+                        ))}
+
+                        {/* সব staged gallery files একসাথে clear */}
+                        <s-button
+                            variant="tertiary"
+                            tone="critical"
+                            onClick={() => fs.media.clearFiles("gallery")}
+                            // pendingFiles["gallery"] = []
+                        >
+                            Clear all selected images
+                        </s-button>
+                    </div>
+                )}
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Debug — Snapshot, History, Validate, State inspection
+              *
+              * এই section-এ যা যা দেখানো হচ্ছে:
+              *   fs.snapshot.get()    — একটা field-এর saved value
+              *   fs.snapshot.getAll() — পুরো snapshot
+              *   fs.snapshot.isDirty  — isDirty-র alias
+              *   fs.history.undo/redo — undo/redo (historyLimit: 50)
+              *   fs.history.canUndo   — undo করা যাবে কিনা
+              *   fs.history.canRedo   — redo করা যাবে কিনা
+              *   fs.history.steps     — কতটা undo step available
+              *   fs.history.clear     — history wipe
+              *   fs.validate.now()    — manually পুরো form validate
+              *   fs.hasValidated      — কোনোদিন validation run হয়েছে কিনা
+              *   fs.isValid           — valid কিনা (hasValidated + no errors)
+              *   fs.dirtyFields       — সব changed field-এর map
+              *   fs.touchedFields     — সব touched field-এর map
+              *   fs.submitCount       — কতবার submit attempt হয়েছে
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section heading="Debug — Snapshot & History">
+
+                {/* ── fs.snapshot.get — একটা field-এর saved value ───────────
+                  * "Revert this field only" UI বানাতে কাজে লাগে।
+                  * title dirty হলেই revert option দেখাও।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button
+                    variant="tertiary"
+                    onClick={() => fs.set("title", fs.snapshot.get("title"))}
+                    disabled={!fs.field.isDirty("title")}
+                    // snapshot-এর "Handmade Leather Bag"-এ ফিরে যাবে
+                >
+                    Revert title to "{fs.snapshot.get("title")}"
+                </s-button>
+
+                {/* ── fs.snapshot.getAll — পুরো snapshot object ─────────────
+                  * Debug-এ console-এ দেখো।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button
+                    variant="tertiary"
+                    onClick={() => console.log("Snapshot:", fs.snapshot.getAll())}
+                >
+                    Log snapshot
+                </s-button>
+
+                {/* ── fs.snapshot.isDirty — isDirty-র alias ─────────────────
+                  * fs.isDirty এবং fs.snapshot.isDirty একই জিনিস।
+                  * ──────────────────────────────────────────────────────── */}
+                <p>Has unsaved changes: {String(fs.snapshot.isDirty)}</p>
+
+                {/* ── fs.history — undo/redo ──────────────────────────────────
+                  * historyLimit: 50 দেওয়া আছে তাই active।
+                  * historyLimit: 0 (default) হলে canUndo/canRedo সবসময় false।
+                  *
+                  * canUndo = history stack-এ কিছু আছে কিনা
+                  * canRedo = future stack-এ কিছু আছে কিনা (undo-র পরে)
+                  * steps   = কতটা undo step available
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button-group>
+                    <s-button
+                        variant="secondary"
+                        onClick={fs.history.undo}
+                        disabled={!fs.history.canUndo}
+                        icon="undo"
+                        // canUndo = false হলে disabled — history empty
+                    >
+                        Undo ({fs.history.steps} steps)
+                    </s-button>
+                    <s-button
+                        variant="secondary"
+                        onClick={fs.history.redo}
+                        disabled={!fs.history.canRedo}
+                        icon="redo"
+                        // canRedo = false হলে disabled — future stack empty
+                    >
+                        Redo
+                    </s-button>
+                    {/* ── fs.history.clear — history ও future stack দুটোই clear */}
+                    <s-button
+                        variant="tertiary"
+                        onClick={fs.history.clear}
+                    >
+                        Clear history
+                    </s-button>
+                </s-button-group>
+
+                {/* ── fs.validate.now — manually পুরো form validate ─────────
+                  * submit() না করে validation result দেখতে চাইলে।
+                  * true = valid, false = error আছে।
+                  * ──────────────────────────────────────────────────────── */}
+                <s-button
+                    variant="secondary"
+                    onClick={() => {
+                        const isValid = fs.validate.now();
+                        console.log("Form valid:", isValid);
+                        console.log("Errors:", fs.fieldErrors);
+                    }}
+                >
+                    Validate now
+                </s-button>
+
+                {/* ── fs.hasValidated — কোনোদিন validation run হয়েছে কিনা ──
+                  * false = এখনো submit বা validate.now() call হয়নি।
+                  * true  = অন্তত একবার validation run হয়েছে।
+                  *
+                  * fs.isValid — hasValidated=true এবং কোনো error নেই।
+                  * hasValidated=false হলে isValid সবসময় false।
+                  * ──────────────────────────────────────────────────────── */}
+                {fs.hasValidated && (
+                    <s-badge tone={fs.isValid ? "success" : "critical"}>
+                        {fs.isValid ? "Form valid ✓" : "Has errors ✗"}
+                    </s-badge>
+                )}
+
+                {/* ── fs.dirtyFields — সব changed leaf field-এর map ─────────
+                  * { "title": true, "address.city": true, "variants.0.price": true }
+                  * ──────────────────────────────────────────────────────── */}
+                {Object.keys(fs.dirtyFields).length > 0 && (
+                    <p>Changed fields: {Object.keys(fs.dirtyFields).join(", ")}</p>
+                )}
+
+                {/* ── fs.touchedFields — user interact করা fields ───────────
+                  * { "title": true, "email": true }
+                  * onBlur call হলে touch হয়।
+                  * ──────────────────────────────────────────────────────── */}
+                {Object.keys(fs.touchedFields).length > 0 && (
+                    <p>Touched fields: {Object.keys(fs.touchedFields).join(", ")}</p>
+                )}
+
+                {/* ── fs.submitCount — কতবার submit attempt হয়েছে ───────────
+                  * 0 = এখনো কোনো submit হয়নি।
+                  * >0 = অন্তত একবার submit চেষ্টা হয়েছে।
+                  * Error visibility control-এ কাজে লাগে।
+                  * ──────────────────────────────────────────────────────── */}
+                {fs.submitCount > 0 && (
+                    <p>Submit attempted {fs.submitCount} time(s)</p>
+                )}
+
+            </s-section>
+
+
+            {/* ══════════════════════════════════════════════════════════════
+              * Bottom action bar — Save / Discard / Sync
+              *
+              * Page header-এ already Save/Discard আছে (slot="primary-action")।
+              * Long form-এ bottom-এও রাখা ভালো — scroll করতে হয় না।
+              * ══════════════════════════════════════════════════════════════ */}
+            <s-section>
+                <s-button-group>
+
+                    {/* ── fs.submit — validate → onSubmit ─────────────────────
+                      * কাজের ধাপ:
+                      *   1. submitCount + 1
+                      *   2. Validation run (schema + validate)
+                      *   3. Error থাকলে: সব field touched, error দেখায়, false return
+                      *   4. Valid হলে: onSubmit callback call হয়
+                      *   5. isSubmitting = true, await শেষে false
+                      *
+                      * loading={true} হলে button disabled হয় + spinner দেখায়।
+                      * isDirty=false হলে কিছু change হয়নি — save করার দরকার নেই।
+                      * ──────────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="primary"
+                        loading={fs.isSubmitting}
+                        disabled={!fs.isDirty || fs.isSubmitting}
+                        onClick={fs.submit}
+                    >
+                        {fs.isSubmitting ? "Saving…" : "Save changes"}
+                    </s-button>
+
+                    {/* ── fs.reset — সব change discard, snapshot-এ revert ──────
+                      * values       → savedSnapshot
+                      * pendingFiles → {}
+                      * removedKeys  → {}
+                      * fieldErrors  → {}
+                      * touchedFields→ {}
+                      * submitCount  → 0
+                      * hasValidated → false
+                      * history/future stack → clear
+                      * ──────────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="secondary"
+                        disabled={!fs.isDirty}
+                        onClick={fs.reset}
+                        // isDirty = false হলে কিছু change হয়নি — discard করার দরকার নেই
+                    >
+                        Discard changes
+                    </s-button>
+
+                    {/* ── fs.syncAfterSave — successful save-এর পর snapshot update
+                      *
+                      * Real usage (useEffect-এ):
+                      *   useEffect(() => {
+                      *     if (fetcher.state === "idle" && fetcher.data?.product) {
+                      *       fs.syncAfterSave(fetcher.data.product);
+                      *       // snapshot = fresh server data
+                      *       // isDirty = false হবে
+                      *     }
+                      *   }, [fetcher.state, fetcher.data]);
+                      *
+                      * Demo-তে loaderData দিয়ে simulate করা হচ্ছে।
+                      * ──────────────────────────────────────────────────────── */}
+                    <s-button
+                        variant="tertiary"
+                        onClick={() => fs.syncAfterSave(loaderData)}
+                        // Real app-এ এখানে fetcher.data.product দাও
+                    >
+                        Simulate sync (demo)
+                    </s-button>
+
+                </s-button-group>
+            </s-section>
+
+        </s-page>
     );
 }
